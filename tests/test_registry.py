@@ -130,6 +130,48 @@ def test_attestation_ids_unique_same_second():
         assert first.id != second.id
 
 
+def test_revoked_agent_rejected_as_subject_and_attester():
+    with tempfile.TemporaryDirectory() as tmp:
+        registry, seller_key, buyer_key, seller_did, buyer_did = setup_world(tmp)
+        registry.revoke(seller_did, key_file=seller_key)
+        try:
+            registry.attest(seller_did, "task_completed", key_file=buyer_key)
+            raise AssertionError("attestation about a revoked agent was accepted")
+        except ValueError:
+            pass
+        try:
+            registry.attest(buyer_did, "task_completed", key_file=seller_key)
+            raise AssertionError("revoked attester was accepted")
+        except ValueError:
+            pass
+
+
+def test_revoke_requires_possession_of_key():
+    with tempfile.TemporaryDirectory() as tmp:
+        registry, seller_key, buyer_key, seller_did, _ = setup_world(tmp)
+        try:
+            registry.revoke(seller_did, key_file=buyer_key)
+            raise AssertionError("revoked with someone else's key")
+        except ValueError:
+            pass
+
+
+def test_revoke_is_one_way_and_flagged_in_query():
+    with tempfile.TemporaryDirectory() as tmp:
+        registry, seller_key, buyer_key, seller_did, _ = setup_world(tmp)
+        registry.attest(seller_did, "task_completed", key_file=buyer_key)
+        identity = registry.revoke(seller_did, key_file=seller_key)
+        assert identity["revoked"] and identity["version"] == 2 and "revoked_at" in identity
+        try:
+            registry.revoke(seller_did, key_file=seller_key)
+            raise AssertionError("double revocation accepted")
+        except ValueError:
+            pass
+        result = registry.query(seller_did)
+        assert "revoked" in result["flags"]
+        assert result["metrics"]["completed"] == 1  # history preserved
+
+
 def test_query_unknown_agent_rejected():
     with tempfile.TemporaryDirectory() as tmp:
         registry, _, _, _, _ = setup_world(tmp)

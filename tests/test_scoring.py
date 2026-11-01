@@ -110,6 +110,14 @@ def test_disputes_crush_score():
     assert "elevated_dispute_signal" in disputed["flags"]
 
 
+def test_dispute_only_history_floors_at_300():
+    log = [att(f"d{i}", "dispute_opened") for i in range(5)]
+    result = score_agent(log, now=NOW)
+    assert result["score"] == 300  # capped dispute load, not a lucky clamp
+    assert result["band"] == "E"
+    assert "elevated_dispute_signal" in result["flags"]
+
+
 def test_band_boundaries():
     assert band_for(900) == "A"
     assert band_for(800) == "A"

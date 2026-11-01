@@ -41,9 +41,11 @@ Rules:
 
 - The **owner** is accountable for the agent's actions. An agent with no
   resolvable owner is unscoreable (band E, flag `no_owner`).
-- **Revocation** is a one-way operation performed by the owner or registry
-  policy. A revoked identity keeps its history but is excluded from new
-  attestations.
+- **Revocation** is one-way and self-service: possession of the identity's
+  private key is the authority to revoke it (`Registry.revoke`, CLI
+  `agentcred revoke --key`). A revoked identity keeps its history but is
+  excluded from new attestations **in both directions** — as subject and as
+  attester. The registry records `revoked_at` and bumps `version`.
 - JSON Schema: `schema/agent-identity.schema.json`.
 
 ## 3. Attestations
@@ -104,7 +106,7 @@ score = 300                                        # floor: everyone starts unpr
       + 200 * depth                                # track record: volume x attester diversity
       + 100 * value                                # settled value
       + 50  * tenure                               # survived time
-      - 300 * (disputes_open / max(1, interactions))
+      - 300 * min(1, disputes_open / max(1, interactions))
 score = clamp(score, 300, 900)
 ```
 

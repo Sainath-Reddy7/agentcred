@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .crypto import did_from_jwk, generate_keypair, write_key
+from .crypto import did_from_jwk, generate_keypair, read_key, write_key
 from .models import ATTESTATION_TYPES
 from .registry import Registry
 
@@ -72,6 +72,16 @@ def cmd_log(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_revoke(args: argparse.Namespace) -> int:
+    did = did_from_jwk(read_key(args.key))
+    identity = Registry(args.state).revoke(did, key_file=args.key)
+    print(
+        f"revoked {identity['did']} (version {identity['version']}) — "
+        "history is kept; new attestations in both directions are refused"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agentcred",
@@ -106,6 +116,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("verify", help="verify log chain and all signatures")
     p.set_defaults(func=cmd_verify)
+
+    p = sub.add_parser("revoke", help="revoke the identity a key owns (self-service, one-way)")
+    p.add_argument("--key", required=True, help="private JWK file of the identity to revoke")
+    p.set_defaults(func=cmd_revoke)
 
     p = sub.add_parser("log", help="list attestations (optionally one agent's)")
     p.add_argument("--agent", default=None)
