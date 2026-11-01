@@ -54,19 +54,20 @@ attestations, and derived trust scores.**
 ## Repository structure
 
 ```
-├── docs/spec.md                  # Protocol specification (v0.3)
+├── docs/spec.md                  # Protocol specification (v0.4)
 ├── schema/                       # JSON Schemas for identity & attestations
 ├── tools/simulate.py             # Scoring calibration harness (runs in CI)
 ├── src/agentcred/
 │   ├── models.py                 # Core data objects
 │   ├── canonical.py              # Canonical JSON form (signing/hashing input)
 │   ├── crypto.py                 # Ed25519 keys, signing, verification, DIDs
-│   ├── log.py                    # Hash-chained append-only attestation log
-│   ├── scoring.py                # Calibrated scoring engine
-│   ├── registry.py               # File-backed reference registry
+│   ├── log.py                    # Hash-chained append-only record log
+│   ├── scoring.py                # Calibrated, fault-aware scoring engine
+│   ├── registry.py               # File-backed reference registry + disputes
+│   ├── evidence.py               # Offline evidence-bundle verifier
 │   ├── api.py                    # HTTP registry API (FastAPI)
 │   └── cli.py                    # The `agentcred` command
-└── tests/                        # Test suite (45 tests)
+└── tests/                        # Test suite (54 tests)
 ```
 
 ## Quickstart
@@ -92,6 +93,27 @@ agentcred log                               # append-only history
 # self-service, one-way: history is kept, new attestations stop
 agentcred revoke --key seller.json
 ```
+
+## Disputes & evidence (v0.4)
+
+When an attested interaction goes wrong, the court system takes over:
+
+```bash
+agentcred dispute-open --key buyer.json --target att_xxx --reason "task never completed"
+# mutual settlement — both parties sign
+agentcred dispute-resolve --dispute dsp_xxx --outcome rejected \
+    --key buyer.json --key seller.json
+
+# export the portable court document; anyone can verify it offline
+agentcred evidence --dispute dsp_xxx --out bundle.json
+agentcred verify-bundle --file bundle.json
+```
+
+Fault is assigned: **upheld** disputes damage the accused, **rejected**
+and **settled** ones are lifted — a false accusation costs the accused
+nothing. The evidence bundle carries the signed records and public keys,
+so any arbiter, platform, or regulator can verify it without registry
+access. Details in [spec §10](docs/spec.md).
 
 ## HTTP API (v0.3)
 
@@ -120,13 +142,12 @@ the revocation intent. Full contract in [spec §9](docs/spec.md).
 
 ## Status & roadmap
 
-v0.3 shipped: Ed25519-signed attestations, a tamper-evident hash-chained
-log, a calibrated scoring formula (simulation-enforced), self-service
-revocation, and a **HTTP registry API** — run `agentcred serve` and other
-platforms can register agents and submit signed attestations over the
-network, with keys never leaving clients. Next: owner-key rotation, remote
-CLI mode, score decay — see [ROADMAP.md](ROADMAP.md) and the
-[protocol spec](docs/spec.md).
+v0.4 shipped: Ed25519-signed attestations, tamper-evident chained logs,
+calibrated fault-aware scoring, self-service revocation, an HTTP registry
+API, and now **the court system** — structured disputes with mutual or
+arbiter resolution, fault assignment, and portable evidence bundles. Next:
+score decay, attester-weighting, escrow on settlement rails — see
+[ROADMAP.md](ROADMAP.md) and the [protocol spec](docs/spec.md).
 
 ## Contributing
 

@@ -62,6 +62,10 @@ def create_app(state_dir: str = "agentcred-state") -> FastAPI:
                 "GET /agents/{did} — identity + trust score",
                 "GET /agents/{did}/attestations — raw history",
                 "POST /attestations — submit a signed attestation",
+                "POST /disputes — open a dispute over an attestation (signed)",
+                "POST /disputes/{id}/resolve — resolve (mutual or arbiter signatures)",
+                "GET /disputes/{id} — dispute view",
+                "GET /disputes/{id}/evidence — portable evidence bundle",
                 "POST /agents/{did}/revoke — revoke (signature over revocation intent)",
                 "GET /verify — log chain + signature report",
                 "GET /health",
@@ -156,6 +160,81 @@ def create_app(state_dir: str = "agentcred-state") -> FastAPI:
                 400, "revocation signature does not verify for this identity"
             ) from exc
         return reg().revoke_identity(did)
+
+    @app.post("/disputes", status_code=201)
+    def open_dispute(body: dict) -> dict:
+        """Client-signed dispute opening. The core (everything except
+        `signature`) is exactly what the opener signs (spec §10)."""
+        signature = body.get("signature")
+        core = {
+            "kind": "dispute.opened",
+            "id": body.get("id"),
+            "target": body.get("target"),
+            "agent": body.get("agent"),
+            "opened_by": body.get("opened_by"),
+            "reason": body.get("reason", ""),
+            "opened_at": body.get("opened_at"),
+            "arbiter": body.get("arbiter"),
+        }
+        if not signature:
+            raise HTTPException(400, "dispute.opened must carry a signature (spec §10)")
+        try:
+            entry = reg().commit_open_dispute(core, [signature])
+        except BadSignatureError as exc:
+            raise HTTPException(400, f"opening signature does not verify: {exc}") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if "unknown" in message and "target" not in message:
+                code = 404
+            elif "revoked" in message:
+                code = 409
+            else:
+                code = 400
+            raise HTTPException(code, message) from exc
+        return {"opened": core["id"], "record": entry}
+
+    @app.post("/disputes/{dispute_id}/resolve", status_code=201)
+    def resolve_dispute(dispute_id: str, body: dict) -> dict:
+        """Resolution with paired signatures. Mutual mode needs the opener
+        and the disputed agent; arbiter mode needs the nominated arbiter."""
+        core = {
+            "kind": "dispute.resolved",
+            "dispute": dispute_id,
+            "outcome": body.get("outcome"),
+            "resolved_by": body.get("resolved_by", []),
+            "resolved_at": body.get("resolved_at"),
+        }
+        signatures = body.get("signatures", [])
+        if not signatures:
+            raise HTTPException(400, "resolution must carry signatures (paired with resolved_by)")
+        try:
+            entry = reg().commit_resolution(core, signatures)
+        except BadSignatureError as exc:
+            raise HTTPException(400, f"resolution signature does not verify: {exc}") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if "unknown" in message:
+                code = 404
+            elif "revoked" in message or "already resolved" in message:
+                code = 409
+            else:
+                code = 400
+            raise HTTPException(code, message) from exc
+        return {"resolved": dispute_id, "outcome": core["outcome"], "record": entry}
+
+    @app.get("/disputes/{dispute_id}")
+    def dispute_view(dispute_id: str) -> dict:
+        try:
+            return reg().dispute_view(dispute_id)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.get("/disputes/{dispute_id}/evidence")
+    def dispute_evidence(dispute_id: str) -> dict:
+        try:
+            return reg().evidence_bundle(dispute_id)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
 
     @app.get("/verify")
     def verify_registry() -> dict:

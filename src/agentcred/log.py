@@ -82,7 +82,8 @@ class LogRecord:
             raise LogTamperError(-1, f"malformed record: {exc}") from exc
 
 
-def _record_hash(index: int, prev: str, entry: dict) -> str:
+def record_hash(index: int, prev: str, entry: dict) -> str:
+    """SHA-256 over the canonical form of {index, prev, entry}."""
     return sha256(canonical({"index": index, "prev": prev, "entry": entry})).hexdigest()
 
 
@@ -101,7 +102,7 @@ def append(log_path: str | Path, entry: dict) -> LogRecord:
         prev = records[-1].hash if records else GENESIS
         index = len(records)
         record = LogRecord(
-            index=index, prev=prev, entry=entry, hash=_record_hash(index, prev, entry)
+            index=index, prev=prev, entry=entry, hash=record_hash(index, prev, entry)
         )
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(record.line().decode("utf-8"))
@@ -116,6 +117,6 @@ def verify_chain(records: list[LogRecord]) -> None:
             raise LogTamperError(record.index, f"expected index {expected_index}")
         if record.prev != prev:
             raise LogTamperError(record.index, "broken link to predecessor")
-        if record.hash != _record_hash(record.index, record.prev, record.entry):
+        if record.hash != record_hash(record.index, record.prev, record.entry):
             raise LogTamperError(record.index, "entry/hash mismatch — history was edited")
         prev = record.hash

@@ -18,10 +18,13 @@
 - [ ] Client tooling for remote registries (CLI `--url` mode)
 - [ ] Sybil-resistance notes: rate-limited attestations, attester reputation bootstrapping
 
-## v0.4 — Score maturity
+## v0.4 — Score maturity & the court system
 - [x] Calibrate v0 formula against simulated agent populations (`tools/simulate.py`, enforced in CI)
+- [x] Structured disputes: fault assignment, mutual/arbiter resolution, portable evidence bundles
 - [ ] Score decay over time (stale attestations count less)
 - [ ] Optional attester-weighting (attestations from higher-banded counterparties count more; targets 3+ agent collusion rings)
+- [ ] False-accuser penalty for rejected disputes; dispute rate limiting
+- [ ] Escrow conditions on settlement rails (x402/AP2 integration)
 
 ## v1.0 — Protocol stabilization
 - [ ] Cross-implementation test vectors
