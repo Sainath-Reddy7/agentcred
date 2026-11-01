@@ -74,6 +74,12 @@ def test_missing_log_is_empty():
         assert load(Path(tmp) / "nope.jsonl") == []
 
 
+def test_lockfile_released_after_append():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = build_log(tmp, n=1)
+        assert not (path.parent / (path.name + ".lock")).exists()
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

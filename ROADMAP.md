@@ -13,7 +13,8 @@
 
 ## v0.3 — Registry API
 - [ ] REST API for register/attest/query/revoke/dispute
-- [ ] Owner key rotation + identity revocation flow
+- [x] Identity revocation flow (self-service via key possession, enforced in both directions)
+- [ ] Owner key rotation
 - [ ] Sybil-resistance notes: rate-limited attestations, attester reputation bootstrapping
 
 ## v0.4 — Score maturity

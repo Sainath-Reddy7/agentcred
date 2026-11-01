@@ -96,7 +96,7 @@ def score_agent(attestations: Iterable[Attestation], now: str | None = None) -> 
     depth = min(1.0, interactions / 20) * min(1.0, m["distinct_attesters"] / 3)
     value = min(1.0, m["volume_usd"] / 20000)
     tenure = min(1.0, m["tenure_days"] / 180)
-    dispute_load = m["disputes_open"] / max(1, interactions)
+    dispute_load = min(1.0, m["disputes_open"] / max(1, interactions))
 
     score = (
         SCORE_FLOOR

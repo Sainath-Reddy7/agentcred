@@ -71,6 +71,30 @@ class Registry:
         self._save_agents(agents)
         return identity
 
+    def revoke(self, did: str, key_file: str | Path) -> dict:
+        """Self-service, one-way revocation.
+
+        Possession of the identity's private key is the authority to revoke
+        it (owner-key binding arrives with v0.3 rotation). History is kept;
+        the identity is excluded from new attestations in both directions.
+        """
+        jwk = read_key(key_file)
+        holder = did_from_jwk(jwk)
+        if holder != did:
+            raise ValueError(f"key belongs to {holder}, not {did}")
+        agents = self._load_agents()
+        identity = agents.get(did)
+        if identity is None:
+            raise ValueError(f"unknown agent {did}")
+        if identity["revoked"]:
+            raise ValueError(f"{did} is already revoked")
+        identity["revoked"] = True
+        identity["revoked_at"] = _now()
+        identity["version"] += 1
+        agents[did] = identity
+        self._save_agents(agents)
+        return identity
+
     # -- attestations ---------------------------------------------------
 
     def attest(
@@ -89,6 +113,10 @@ class Registry:
             )
         if agent not in agents:
             raise ValueError(f"unknown agent {agent}")
+        if agents[attester]["revoked"]:
+            raise ValueError(f"attester {attester} is revoked")
+        if agents[agent]["revoked"]:
+            raise ValueError(f"agent {agent} is revoked")
         attestation = Attestation(
             id=f"att_{uuid.uuid4().hex[:12]}",
             agent=agent,
@@ -119,6 +147,8 @@ class Registry:
             raise ValueError(f"unknown agent {agent}")
         result = score_agent(self.attestations_for(agent))
         result["identity"] = identity
+        if identity.get("revoked"):
+            result["flags"].append("revoked")
         return result
 
     def verify(self) -> dict:

@@ -72,6 +72,30 @@ def test_error_exit_codes():
         assert code == 2  # unregistered attester/agent → usage-style error
 
 
+def test_revoke_blocks_future_attestations():
+    with tempfile.TemporaryDirectory() as tmp:
+        state = str(Path(tmp) / "state")
+        seller_key = str(Path(tmp) / "seller.json")
+        buyer_key = str(Path(tmp) / "buyer.json")
+        run("--state", state, "keygen", "--out", seller_key)
+        run("--state", state, "keygen", "--out", buyer_key)
+        code, out = run("--state", state, "register", "--key", seller_key, "--name", "s")
+        seller_did = json.loads(out)["did"]
+        run("--state", state, "register", "--key", buyer_key, "--name", "b")
+        assert run("--state", state, "attest", "--key", buyer_key, "--agent", seller_did,
+                   "--type", "task_completed")[0] == 0
+
+        assert run("--state", state, "revoke", "--key", seller_key)[0] == 0
+        code = run("--state", state, "attest", "--key", buyer_key, "--agent", seller_did,
+                   "--type", "task_completed")[0]
+        assert code == 2  # revoked subject refused
+
+        code, out = run("--state", state, "query", "--agent", seller_did)
+        result = json.loads(out)
+        assert "revoked" in result["flags"]
+        assert result["metrics"]["completed"] == 1  # history kept
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

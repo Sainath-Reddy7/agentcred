@@ -65,7 +65,7 @@ attestations, and derived trust scores.**
 │   ├── scoring.py                # Calibrated scoring engine
 │   ├── registry.py               # File-backed reference registry
 │   └── cli.py                    # The `agentcred` command
-└── tests/                        # Test suite (31 tests)
+└── tests/                        # Test suite (37 tests)
 ```
 
 ## Quickstart
@@ -87,6 +87,9 @@ agentcred attest --key buyer.json --agent did:agentcred:xxx \
 agentcred query --agent did:agentcred:xxx   # score + band A–E
 agentcred verify                            # chain + every signature
 agentcred log                               # append-only history
+
+# self-service, one-way: history is kept, new attestations stop
+agentcred revoke --key seller.json
 ```
 
 ## Status & roadmap
