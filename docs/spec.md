@@ -95,8 +95,10 @@ tenure_days   = t - first_attestation(a)
 
 interactions  = completed + settled
 distinct      = count(distinct counterparty attesters)
+total_disputes = disputes_open + structured_open + disputes_upheld
+                 (rejected/settled disputes are lifted — see §10)
 
-reliability = interactions / max(1, interactions + 2 * disputes_open)
+reliability = interactions / max(1, interactions + 2 * total_disputes)
 depth       = min(1, interactions / 20) * min(1, distinct / 3)
 value       = min(1, volume_usd / 20000)
 tenure      = min(1, tenure_days / 180)
@@ -106,7 +108,7 @@ score = 300                                        # floor: everyone starts unpr
       + 200 * depth                                # track record: volume x attester diversity
       + 100 * value                                # settled value
       + 50  * tenure                               # survived time
-      - 300 * min(1, disputes_open / max(1, interactions))
+      - 300 * min(1, total_disputes / max(1, interactions))
 score = clamp(score, 300, 900)
 ```
 
@@ -130,8 +132,10 @@ one-shot agents hold E; established diverse agents reach A; a 50% dispute
 rate lands D; single-attester histories stay under 500.
 
 Remaining limits, deliberate and documented: no time decay yet — a
-ten-month-old attestation counts like yesterday's; dispute fault is not
-assigned (the opener's dispute weighs as much as a resolved one).
+ten-month-old attestation counts like yesterday's; false accusers pay
+nothing for rejected disputes (accuser penalties are roadmap); raw v0.2
+`dispute_opened` attestations still count 1x alongside structured
+disputes.
 
 Bands (credit-bureau style):
 
@@ -247,3 +251,60 @@ authority the protocol recognizes (until v0.3 owner-key rotation).
 **Not provided yet** (reference deployment, not production): authentication,
 rate limiting, request signing, multi-tenant state. Sybil-resistance
 measures are the open v0.3 roadmap item.
+
+## 10. Disputes & evidence bundles (v0.4)
+
+The court system. The chain (§8) gains record kinds: `attestation` (the
+default, including all pre-v0.4 records), `dispute.opened`,
+`dispute.resolved`.
+
+### Opening
+
+A dispute targets **one specific attestation**. Core fields — the exact
+bytes the opener signs (canonical form, §7):
+
+```
+{kind: "dispute.opened", id, target, agent, opened_by, reason, opened_at, arbiter}
+```
+
+- `agent` (the disputed party) must equal the target attestation's agent.
+- `arbiter` is optional: a registered, unrevoked agent who is not the
+  disputed party. Setting it enables arbiter mode.
+
+### Resolution
+
+Core fields, with `signatures` paired 1:1 with `resolved_by`:
+
+```
+{kind: "dispute.resolved", dispute, outcome, resolved_by: [did, ...], resolved_at}
+```
+
+- **Mutual mode** (no arbiter): both the opener and the disputed agent sign.
+- **Arbiter mode**: the nominated arbiter's signature alone suffices.
+- Outcomes: `upheld` (fault against the disputed agent), `rejected` (the
+  accusation failed), `settled` (mutual walk-away, no fault).
+
+### Fault-aware scoring
+
+Upheld and still-open disputes count against the agent (§4); rejected and
+settled ones are lifted — a false accusation costs the accused nothing.
+Referencing a specific attestation is what makes fault assignment
+possible at all.
+
+### Evidence bundles
+
+`agentcred evidence --dispute dsp_x` exports an
+`agentcred/evidence-bundle@1` document: the signed records (opening,
+resolution, target attestation) plus the public identities needed to
+verify every signature offline (`agentcred verify-bundle`). Any third
+party — arbiter, platform, regulator — can check the document with no
+registry access. Subset bundles prove record integrity and authenticity;
+chain *membership* requires the full log, so bundles carry `meta.head` to
+anchor against a live registry.
+
+### Honest limits
+
+No dispute rate limiting yet (griefing vector: mass-opening disputes —
+they count provisionally while open); no penalty for serial false
+accusers; no escrow/settlement integration (x402/AP2 rails are a
+separate roadmap item).

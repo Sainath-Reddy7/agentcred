@@ -100,6 +100,24 @@ SCENARIOS = [
         lambda r: r["score"] >= 700,
         "25 clean settlements from 4 attesters: payments count as reliability",
     ),
+    (
+        "dispute_upheld_penalized",
+        lambda: (
+            many("u", "task_completed", 12, 3, 60),
+            [{"status": "resolved", "outcome": "upheld"}] * 3,
+        ),
+        lambda r: r["score"] < 600,
+        "3 upheld disputes drop a mid-band agent to D or worse",
+    ),
+    (
+        "dispute_rejected_lifted",
+        lambda: (
+            many("r", "task_completed", 12, 3, 60),
+            [{"status": "resolved", "outcome": "rejected"}] * 3,
+        ),
+        lambda r: r["band"] == "C",
+        "false accusations cost the accused nothing (same band as clean)",
+    ),
 ]
 
 
@@ -109,7 +127,12 @@ def main() -> int:
     print(f"{'scenario':<{width}}  band  score   int  atts  verdict")
     print("-" * (width + 44))
     for name, build, check, why in SCENARIOS:
-        result = score_agent(build(), now=NOW)
+        built = build()
+        if isinstance(built, tuple):
+            attestations, disputes = built
+        else:
+            attestations, disputes = built, None
+        result = score_agent(attestations, now=NOW, disputes=disputes)
         m = result["metrics"]
         ok = check(result)
         if not ok:

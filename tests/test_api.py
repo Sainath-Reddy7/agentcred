@@ -183,6 +183,76 @@ def test_invalid_type_rejected():
         assert client.post("/attestations", json=body).status_code == 400
 
 
+def test_dispute_flow_via_api():
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
+    from agentcred.evidence import verify_bundle
+
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        seller_jwk, seller_did = register(client, "seller")
+        buyer_jwk, buyer_did = register(client, "buyer")
+
+        att = signed_attestation(buyer_jwk, seller_did, "task_completed")
+        posted = client.post("/attestations", json=att).json()["attestation"]
+
+        core = {
+            "kind": "dispute.opened",
+            "id": "dsp_api1",
+            "target": posted["id"],
+            "agent": seller_did,
+            "opened_by": buyer_did,
+            "reason": "task not actually completed",
+            "opened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "arbiter": None,
+        }
+        response = client.post(
+            "/disputes", json=core | {"signature": sign(canonical(core), buyer_jwk)}
+        )
+        assert response.status_code == 201, response.text
+
+        # one-sided resolution is refused
+        res_core = {
+            "kind": "dispute.resolved",
+            "dispute": "dsp_api1",
+            "outcome": "rejected",
+            "resolved_by": [buyer_did],
+            "resolved_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        one_sided = client.post(
+            "/disputes/dsp_api1/resolve",
+            json=res_core | {"signatures": [sign(canonical(res_core), buyer_jwk)]},
+        )
+        assert one_sided.status_code == 400
+
+        mutual_core = res_core | {"resolved_by": [buyer_did, seller_did]}
+        resolved = client.post(
+            "/disputes/dsp_api1/resolve",
+            json=mutual_core
+            | {
+                "signatures": [
+                    sign(canonical(mutual_core), buyer_jwk),
+                    sign(canonical(mutual_core), seller_jwk),
+                ]
+            },
+        )
+        assert resolved.status_code == 201, resolved.text
+
+        view = client.get("/disputes/dsp_api1").json()
+        assert view["status"] == "resolved" and view["outcome"] == "rejected"
+
+        bundle = client.get("/disputes/dsp_api1/evidence").json()
+        report = verify_bundle(bundle)
+        assert report["ok"], report["problems"]
+        assert report["signatures_valid"] == 4
+
+        # false accusation lifted: seller's score unaffected by the dispute
+        report_card = client.get(f"/agents/{seller_did}").json()
+        assert report_card["metrics"]["disputes_lifted"] == 1
+        assert report_card["metrics"]["disputes_upheld"] == 0
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

@@ -95,6 +95,50 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dispute_open(args: argparse.Namespace) -> int:
+    registry = Registry(args.state)
+    entry = registry.open_dispute(
+        target=args.target, reason=args.reason, key_file=args.key, arbiter=args.arbiter
+    )
+    print(f"opened {entry['id']}: dispute against {entry['agent']} over {entry['target']}")
+    return 0
+
+
+def cmd_dispute_resolve(args: argparse.Namespace) -> int:
+    registry = Registry(args.state)
+    entry = registry.resolve_dispute(
+        dispute=args.dispute, outcome=args.outcome, key_files=args.key
+    )
+    print(
+        f"resolved {entry['dispute']} as {entry['outcome']} — "
+        f"signed by {', '.join(entry['resolved_by'])}"
+    )
+    return 0
+
+
+def cmd_evidence(args: argparse.Namespace) -> int:
+    import json as _json
+
+    bundle = Registry(args.state).evidence_bundle(args.dispute)
+    if args.out:
+        Path(args.out).write_text(_json.dumps(bundle, indent=2), encoding="utf-8")
+        print(f"evidence bundle written to {args.out}")
+    else:
+        print(_json.dumps(bundle, indent=2))
+    return 0
+
+
+def cmd_verify_bundle(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from .evidence import verify_bundle
+
+    bundle = _json.loads(Path(args.file).read_text(encoding="utf-8"))
+    report = verify_bundle(bundle)
+    print(_json.dumps(report, indent=2))
+    return 0 if report["ok"] else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agentcred",
@@ -138,6 +182,31 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser("dispute-open", help="open a signed dispute over an attestation")
+    p.add_argument("--key", required=True, help="opener's private JWK file")
+    p.add_argument("--target", required=True, help="id of the attestation being disputed")
+    p.add_argument("--reason", required=True)
+    p.add_argument("--arbiter", default=None, help="nominated arbiter DID (enables arbiter mode)")
+    p.set_defaults(func=cmd_dispute_open)
+
+    p = sub.add_parser("dispute-resolve", help="resolve a dispute (mutual or arbiter)")
+    p.add_argument("--dispute", required=True)
+    p.add_argument("--outcome", required=True, choices=["upheld", "rejected", "settled"])
+    p.add_argument(
+        "--key", action="append", required=True,
+        help="resolver key file; repeat for mutual mode (opener + disputed agent)",
+    )
+    p.set_defaults(func=cmd_dispute_resolve)
+
+    p = sub.add_parser("evidence", help="export a dispute's evidence bundle")
+    p.add_argument("--dispute", required=True)
+    p.add_argument("--out", default=None, help="write bundle to file instead of stdout")
+    p.set_defaults(func=cmd_evidence)
+
+    p = sub.add_parser("verify-bundle", help="offline-verify an evidence bundle")
+    p.add_argument("--file", required=True)
+    p.set_defaults(func=cmd_verify_bundle)
 
     p = sub.add_parser("log", help="list attestations (optionally one agent's)")
     p.add_argument("--agent", default=None)

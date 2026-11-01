@@ -19,10 +19,13 @@ from pathlib import Path
 
 from nacl.exceptions import BadSignatureError
 
-from .crypto import did_from_jwk, read_key, sign_attestation, verify_attestation
+from .canonical import canonical
+from .crypto import did_from_jwk, read_key, sign, sign_attestation, verify, verify_attestation
 from .log import LogTamperError, append, load, verify_chain
 from .models import Attestation
 from .scoring import score_agent
+
+DISPUTE_OUTCOMES = frozenset({"upheld", "rejected", "settled"})
 
 
 def _now() -> str:
@@ -155,18 +158,17 @@ class Registry:
         verify_attestation(
             attestation, agents[attestation.attester]["public_key"]
         )
-        append(self.log_path, attestation.to_dict())
+        append(self.log_path, attestation.to_dict() | {"kind": "attestation"})
         return attestation
 
     def attestations_for(self, agent: str | None = None) -> list[Attestation]:
-        records = load(self.log_path)
-        if agent is None:
-            return [Attestation.from_dict(r.entry) for r in records]
-        return [
-            Attestation.from_dict(r.entry)
-            for r in records
-            if r.entry.get("agent") == agent
-        ]
+        out = []
+        for record in load(self.log_path):
+            if record.entry.get("kind", "attestation") != "attestation":
+                continue
+            if agent is None or record.entry.get("agent") == agent:
+                out.append(Attestation.from_dict(record.entry))
+        return out
 
     # -- queries --------------------------------------------------------
 
@@ -174,11 +176,267 @@ class Registry:
         identity = self._load_agents().get(agent)
         if identity is None:
             raise ValueError(f"unknown agent {agent}")
-        result = score_agent(self.attestations_for(agent))
+        result = score_agent(
+            self.attestations_for(agent),
+            disputes=self.disputes_for(agent),
+        )
         result["identity"] = identity
         if identity.get("revoked"):
             result["flags"].append("revoked")
         return result
+
+    # -- structured disputes (v0.4) --------------------------------------
+
+    def _records(self):
+        return load(self.log_path)
+
+    def _find_attestation_entry(self, attestation_id: str) -> dict | None:
+        for record in self._records():
+            if record.entry.get("kind", "attestation") != "attestation":
+                continue
+            if record.entry.get("id") == attestation_id:
+                return record.entry
+        return None
+
+    def open_dispute(
+        self,
+        target: str,
+        reason: str,
+        key_file: str | Path,
+        arbiter: str | None = None,
+    ) -> dict:
+        """Build, sign, and commit a dispute over a specific attestation."""
+        jwk = read_key(key_file)
+        core = {
+            "kind": "dispute.opened",
+            "id": f"dsp_{uuid.uuid4().hex[:12]}",
+            "target": target,
+            "agent": "",  # filled from the target below
+            "opened_by": did_from_jwk(jwk),
+            "reason": reason,
+            "opened_at": _now(),
+            "arbiter": arbiter,
+        }
+        target_entry = self._find_attestation_entry(target)
+        if target_entry is None:
+            raise ValueError(f"unknown target attestation {target}")
+        core["agent"] = target_entry["agent"]
+        signature = sign(canonical(core), jwk)
+        return self.commit_open_dispute(core, [signature])
+
+    def commit_open_dispute(self, core: dict, signatures: list[str]) -> dict:
+        """Verify and append a pre-signed dispute.opened record (API path)."""
+        agents = self._load_agents()
+        required = ("kind", "id", "target", "agent", "opened_by", "reason", "opened_at")
+        for field in required:
+            if field not in core:
+                raise ValueError(f"dispute.opened missing field {field}")
+        if not core["id"].startswith("dsp_"):
+            raise ValueError("dispute ids must start with dsp_")
+        target_entry = self._find_attestation_entry(core["target"])
+        if target_entry is None:
+            raise ValueError(f"unknown target attestation {core['target']}")
+        if core["agent"] != target_entry["agent"]:
+            raise ValueError("disputed agent does not match the target attestation")
+        opener = agents.get(core["opened_by"])
+        if opener is None:
+            raise ValueError(f"unknown agent {core['opened_by']}")
+        if opener["revoked"]:
+            raise ValueError(f"opener {core['opened_by']} is revoked")
+        if core.get("arbiter"):
+            arb = agents.get(core["arbiter"])
+            if arb is None:
+                raise ValueError(f"unknown arbiter {core['arbiter']}")
+            if arb["revoked"]:
+                raise ValueError(f"arbiter {core['arbiter']} is revoked")
+            if core["arbiter"] == core["agent"]:
+                raise ValueError("the disputed agent cannot be its own arbiter")
+        if self._dispute_state(core["id"]) is not None:
+            raise ValueError(f"dispute {core['id']} already exists")
+        if len(signatures) != 1:
+            raise ValueError("dispute.opened carries exactly one signature")
+        try:
+            verify(canonical(core), signatures[0], opener["public_key"])
+        except BadSignatureError as exc:
+            raise ValueError(f"opening signature does not verify: {exc}") from exc
+        entry = core | {"signatures": list(signatures)}
+        append(self.log_path, entry)
+        return entry
+
+    def resolve_dispute(
+        self, dispute: str, outcome: str, key_files: list[str | Path]
+    ) -> dict:
+        """Build, sign, and commit a resolution.
+
+        Mutual mode: signatures from BOTH the opener and the disputed agent.
+        Arbiter mode (arbiter set at opening): the arbiter's signature alone.
+        """
+        state = self._dispute_state(dispute)
+        if state is None:
+            raise ValueError(f"unknown dispute {dispute}")
+        if state["resolution"] is not None:
+            raise ValueError(f"dispute {dispute} is already resolved")
+        if outcome not in DISPUTE_OUTCOMES:
+            raise ValueError(f"outcome must be one of {sorted(DISPUTE_OUTCOMES)}")
+        signers = [did_from_jwk(read_key(k)) for k in key_files]
+        core = {
+            "kind": "dispute.resolved",
+            "dispute": dispute,
+            "outcome": outcome,
+            "resolved_by": signers,
+            "resolved_at": _now(),
+        }
+        signatures = [
+            sign(canonical(core), read_key(k)) for k in key_files
+        ]
+        return self.commit_resolution(core, signatures)
+
+    def commit_resolution(self, core: dict, signatures: list[str]) -> dict:
+        """Verify and append a pre-signed dispute.resolved record (API path)."""
+        agents = self._load_agents()
+        state = self._dispute_state(core.get("dispute", ""))
+        if state is None:
+            raise ValueError(f"unknown dispute {core.get('dispute')}")
+        if state["resolution"] is not None:
+            raise ValueError(f"dispute {core['dispute']} is already resolved")
+        if core.get("outcome") not in DISPUTE_OUTCOMES:
+            raise ValueError(f"outcome must be one of {sorted(DISPUTE_OUTCOMES)}")
+        resolved_by = core.get("resolved_by", [])
+        if not resolved_by or len(signatures) != len(resolved_by):
+            raise ValueError("resolved_by and signatures must be non-empty and paired 1:1")
+        identities = []
+        for did in resolved_by:
+            identity = agents.get(did)
+            if identity is None:
+                raise ValueError(f"unknown agent {did}")
+            if identity["revoked"]:
+                raise ValueError(f"resolver {did} is revoked")
+            identities.append(identity)
+        opened = state["opened"]
+        if opened.get("arbiter"):
+            if opened["arbiter"] not in resolved_by:
+                raise ValueError(
+                    f"arbiter {opened['arbiter']} must sign the resolution"
+                )
+        else:  # mutual mode
+            needed = {opened["opened_by"], opened["agent"]}
+            if not needed.issubset(set(resolved_by)):
+                raise ValueError(
+                    f"mutual resolution requires signatures from {sorted(needed)}"
+                )
+        for signature, identity in zip(signatures, identities):
+            try:
+                verify(canonical(core), signature, identity["public_key"])
+            except BadSignatureError as exc:
+                raise ValueError(f"resolution signature does not verify: {exc}") from exc
+        entry = core | {"signatures": list(signatures)}
+        append(self.log_path, entry)
+        return entry
+
+    def _dispute_state(self, dispute_id: str) -> dict | None:
+        opened = None
+        resolution = None
+        for record in self._records():
+            entry = record.entry
+            if entry.get("kind") == "dispute.opened" and entry.get("id") == dispute_id:
+                opened = entry
+            if entry.get("kind") == "dispute.resolved" and entry.get("dispute") == dispute_id:
+                resolution = entry
+        if opened is None:
+            return None
+        return {
+            "opened": opened,
+            "resolution": resolution,
+            "status": "resolved" if resolution else "open",
+            "outcome": resolution["outcome"] if resolution else None,
+        }
+
+    def dispute_view(self, dispute_id: str) -> dict:
+        state = self._dispute_state(dispute_id)
+        if state is None:
+            raise ValueError(f"unknown dispute {dispute_id}")
+        opened, resolution = state["opened"], state["resolution"]
+        view = {k: opened[k] for k in ("id", "target", "agent", "opened_by", "reason", "opened_at")}
+        view["arbiter"] = opened.get("arbiter")
+        view["status"] = state["status"]
+        view["outcome"] = state["outcome"]
+        if resolution:
+            view["resolved_by"] = resolution["resolved_by"]
+            view["resolved_at"] = resolution["resolved_at"]
+        return view
+
+    def disputes_for(self, agent: str) -> list[dict]:
+        """Dispute views for scoring: every dispute where `agent` is the
+        disputed party, with status and outcome for fault assignment."""
+        views = []
+        for record in self._records():
+            entry = record.entry
+            if entry.get("kind") == "dispute.opened" and entry.get("agent") == agent:
+                views.append(self.dispute_view(entry["id"]))
+        return views
+
+    def evidence_bundle(self, dispute_id: str) -> dict:
+        """Portable, self-verifying court document for one dispute.
+
+        Contains the signed records (opening, resolution, target
+        attestation) plus the public identities needed to verify every
+        signature offline. Subset bundles prove record integrity and
+        authenticity; proving *chain membership* requires the full log —
+        `meta.head` lets any live registry attest to it later.
+        """
+        state = self._dispute_state(dispute_id)
+        if state is None:
+            raise ValueError(f"unknown dispute {dispute_id}")
+        wanted: set[str] = {dispute_id}
+        records = self._records()
+        subset = []
+        for record in records:
+            entry = record.entry
+            if entry.get("kind") == "dispute.opened" and entry.get("id") in wanted:
+                subset.append(record)
+            elif entry.get("kind") == "dispute.resolved" and entry.get("dispute") in wanted:
+                subset.append(record)
+            elif (
+                entry.get("kind", "attestation") == "attestation"
+                and entry.get("id") == state["opened"]["target"]
+            ):
+                subset.append(record)
+        agents = self._load_agents()
+        involved: set[str] = set()
+        for record in subset:
+            entry = record.entry
+            kind = entry.get("kind", "attestation")
+            if kind == "attestation":
+                involved.update((entry["agent"], entry["attester"]))
+            elif kind == "dispute.opened":
+                involved.add(entry["opened_by"])
+                if entry.get("arbiter"):
+                    involved.add(entry["arbiter"])
+            elif kind == "dispute.resolved":
+                involved.update(entry["resolved_by"])
+        identities = {
+            did: {"public_key": agents[did]["public_key"], "revoked": agents[did]["revoked"]}
+            for did in involved
+            if did in agents
+        }
+        return {
+            "format": "agentcred/evidence-bundle@1",
+            "dispute": dispute_id,
+            "records": [
+                {"index": r.index, "prev": r.prev, "entry": r.entry, "hash": r.hash}
+                for r in subset
+            ],
+            "identities": identities,
+            "meta": {
+                "log_length": len(records),
+                "head": records[-1].hash if records else "0" * 64,
+            },
+            "note": (
+                "subset bundle: record integrity and signatures are provable "
+                "offline; chain membership requires the full log (meta.head "
+                "anchors against a live registry)"
+            ),
+        }
 
     def verify(self) -> dict:
         """Walk the log: chain integrity + every signature against the
@@ -196,25 +454,64 @@ class Registry:
 
         agents = self._load_agents()
         valid = 0
-        for record in records:
-            att = Attestation.from_dict(record.entry)
-            if att.agent not in agents:
-                problems.append(
-                    {"index": record.index, "issue": "unknown_agent", "detail": att.agent}
-                )
-                continue
-            jwk = agents.get(att.attester, {}).get("public_key")
-            if not jwk:
-                problems.append(
-                    {"index": record.index, "issue": "unknown_attester", "detail": att.attester}
-                )
-                continue
+        opened_seen: set[str] = set()
+
+        def _check_sig(index: int, who: str, message: bytes, signature: str) -> bool:
+            identity = agents.get(who)
+            if identity is None:
+                problems.append({"index": index, "issue": "unknown_agent", "detail": who})
+                return False
             try:
-                verify_attestation(att, jwk)
-                valid += 1
+                verify(message, signature, identity["public_key"])
+                return True
             except (BadSignatureError, ValueError) as exc:
                 problems.append(
-                    {"index": record.index, "issue": "bad_signature", "detail": str(exc)}
+                    {"index": index, "issue": "bad_signature", "detail": f"{who}: {exc}"}
+                )
+                return False
+
+        for record in records:
+            entry = record.entry
+            kind = entry.get("kind", "attestation")
+            if kind == "attestation":
+                att = Attestation.from_dict(entry)
+                if att.agent not in agents:
+                    problems.append(
+                        {"index": record.index, "issue": "unknown_agent", "detail": att.agent}
+                    )
+                    continue
+                jwk = agents.get(att.attester, {}).get("public_key")
+                if not jwk:
+                    problems.append(
+                        {"index": record.index, "issue": "unknown_attester", "detail": att.attester}
+                    )
+                    continue
+                try:
+                    verify_attestation(att, jwk)
+                    valid += 1
+                except (BadSignatureError, ValueError) as exc:
+                    problems.append(
+                        {"index": record.index, "issue": "bad_signature", "detail": str(exc)}
+                    )
+            elif kind == "dispute.opened":
+                core = {k: v for k, v in entry.items() if k != "signatures"}
+                if _check_sig(record.index, entry["opened_by"], canonical(core), entry["signatures"][0]):
+                    valid += 1
+                opened_seen.add(entry["id"])
+            elif kind == "dispute.resolved":
+                if entry.get("dispute") not in opened_seen:
+                    problems.append(
+                        {"index": record.index, "issue": "resolution_without_dispute",
+                         "detail": entry.get("dispute")}
+                    )
+                    continue
+                core = {k: v for k, v in entry.items() if k != "signatures"}
+                for who, signature in zip(entry.get("resolved_by", []), entry.get("signatures", [])):
+                    if _check_sig(record.index, who, canonical(core), signature):
+                        valid += 1
+            else:
+                problems.append(
+                    {"index": record.index, "issue": "unknown_kind", "detail": kind}
                 )
         return {
             "ok": not problems,

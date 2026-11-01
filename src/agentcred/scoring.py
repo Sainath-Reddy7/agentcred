@@ -79,24 +79,53 @@ def band_for(score: float) -> str:
     return "E"
 
 
-def score_agent(attestations: Iterable[Attestation], now: str | None = None) -> dict:
-    """Score an agent from its attestation log. See docs/spec.md §4.
+def _dispute_effect(disputes: Iterable[dict] | None) -> dict:
+    """Fold structured dispute views into counting buckets.
 
-    v0.2.1 calibration: reliability pays out only in proportion to depth
-    (volume x attester diversity), so thin or single-source histories stay
-    provisional no matter how clean they look.
+    Fault assignment (v0.4): upheld disputes count against the agent;
+    rejected and settled (mutual, no fault) are lifted — they do not count.
+    Open disputes count provisionally, like raw v0.2 dispute attestations.
+    """
+    open_now = upheld = lifted = 0
+    for d in disputes or []:
+        if d.get("status") == "resolved":
+            if d.get("outcome") == "upheld":
+                upheld += 1
+            else:  # rejected or settled
+                lifted += 1
+        else:
+            open_now += 1
+    return {"open": open_now, "upheld": upheld, "lifted": lifted}
+
+
+def score_agent(
+    attestations: Iterable[Attestation],
+    now: str | None = None,
+    disputes: Iterable[dict] | None = None,
+) -> dict:
+    """Score an agent from its attestation log and structured disputes.
+
+    See docs/spec.md §4. v0.2.1 calibration: reliability pays out only in
+    proportion to depth (volume x attester diversity). v0.4: dispute fault
+    is assigned — upheld disputes count against the agent, rejected/settled
+    ones are lifted.
     """
     m = compute_metrics(attestations, now=now)
+    dv = _dispute_effect(disputes)
+    m["disputes_structured_open"] = dv["open"]
+    m["disputes_upheld"] = dv["upheld"]
+    m["disputes_lifted"] = dv["lifted"]
+    total_disputes = m["disputes_open"] + dv["open"] + dv["upheld"]
 
-    if m["interactions"] == 0 and m["disputes_open"] == 0:
+    if m["interactions"] == 0 and total_disputes == 0:
         return {"score": SCORE_FLOOR, "band": band_for(SCORE_FLOOR), "metrics": m, "flags": ["unproven"]}
 
     interactions = m["interactions"]
-    reliability = interactions / max(1, interactions + 2 * m["disputes_open"])
+    reliability = interactions / max(1, interactions + 2 * total_disputes)
     depth = min(1.0, interactions / 20) * min(1.0, m["distinct_attesters"] / 3)
     value = min(1.0, m["volume_usd"] / 20000)
     tenure = min(1.0, m["tenure_days"] / 180)
-    dispute_load = min(1.0, m["disputes_open"] / max(1, interactions))
+    dispute_load = min(1.0, total_disputes / max(1, interactions))
 
     score = (
         SCORE_FLOOR
@@ -109,7 +138,7 @@ def score_agent(attestations: Iterable[Attestation], now: str | None = None) -> 
     score = round(max(SCORE_FLOOR, min(900.0, score)), 1)
 
     flags: list[str] = []
-    if m["disputes_open"] > 0 and reliability < 0.5:
+    if total_disputes > 0 and reliability < 0.5:
         flags.append("elevated_dispute_signal")
 
     return {"score": score, "band": band_for(score), "metrics": m, "flags": flags}
