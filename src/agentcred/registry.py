@@ -52,7 +52,17 @@ class Registry:
         display_name: str | None = None,
         capabilities: tuple[str, ...] = (),
     ) -> dict:
-        jwk = read_key(key_file)
+        return self.register_jwk(
+            read_key(key_file), display_name=display_name, capabilities=capabilities
+        )
+
+    def register_jwk(
+        self,
+        jwk: dict,
+        display_name: str | None = None,
+        capabilities: tuple[str, ...] = (),
+    ) -> dict:
+        """Register an identity from a JWK (private file or public-only)."""
         did = did_from_jwk(jwk)
         agents = self._load_agents()
         if did in agents:
@@ -71,6 +81,9 @@ class Registry:
         self._save_agents(agents)
         return identity
 
+    def identity(self, did: str) -> dict | None:
+        return self._load_agents().get(did)
+
     def revoke(self, did: str, key_file: str | Path) -> dict:
         """Self-service, one-way revocation.
 
@@ -82,6 +95,10 @@ class Registry:
         holder = did_from_jwk(jwk)
         if holder != did:
             raise ValueError(f"key belongs to {holder}, not {did}")
+        return self.revoke_identity(did)
+
+    def revoke_identity(self, did: str) -> dict:
+        """Apply revocation after authority has been established."""
         agents = self._load_agents()
         identity = agents.get(did)
         if identity is None:
@@ -104,28 +121,40 @@ class Registry:
         key_file: str | Path,
         payload: dict | None = None,
     ) -> Attestation:
-        agents = self._load_agents()
+        """Build, sign, and commit an attestation from an attester key file."""
         jwk = read_key(key_file)
-        attester = did_from_jwk(jwk)
-        if attester not in agents:
-            raise ValueError(
-                f"attester {attester} is not registered — register the key first"
-            )
-        if agent not in agents:
-            raise ValueError(f"unknown agent {agent}")
-        if agents[attester]["revoked"]:
-            raise ValueError(f"attester {attester} is revoked")
-        if agents[agent]["revoked"]:
-            raise ValueError(f"agent {agent} is revoked")
         attestation = Attestation(
             id=f"att_{uuid.uuid4().hex[:12]}",
             agent=agent,
-            attester=attester,
+            attester=did_from_jwk(jwk),
             type=type_,
             signed_at=_now(),
             payload=payload or {},
         )
-        attestation = sign_attestation(attestation, jwk)
+        return self.record(sign_attestation(attestation, jwk))
+
+    def record(self, attestation: Attestation) -> Attestation:
+        """Verify and commit a pre-signed counterparty attestation.
+
+        Enforces: attester registered and not revoked, subject registered
+        and not revoked, signature valid under the attester's registered
+        public key. This is the trust boundary for submitted attestations
+        (API path); the local CLI path funnels through it too.
+        """
+        agents = self._load_agents()
+        if attestation.attester not in agents:
+            raise ValueError(
+                f"attester {attestation.attester} is not registered — register the key first"
+            )
+        if attestation.agent not in agents:
+            raise ValueError(f"unknown agent {attestation.agent}")
+        if agents[attestation.attester]["revoked"]:
+            raise ValueError(f"attester {attestation.attester} is revoked")
+        if agents[attestation.agent]["revoked"]:
+            raise ValueError(f"agent {attestation.agent} is revoked")
+        verify_attestation(
+            attestation, agents[attestation.attester]["public_key"]
+        )
         append(self.log_path, attestation.to_dict())
         return attestation
 

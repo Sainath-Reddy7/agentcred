@@ -82,6 +82,19 @@ def cmd_revoke(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    import uvicorn
+
+    from .api import create_app
+
+    print(
+        f"agentcred {__version__} registry API → http://{args.host}:{args.port} "
+        f"(state: {args.state})"
+    )
+    uvicorn.run(create_app(args.state), host=args.host, port=args.port)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agentcred",
@@ -120,6 +133,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("revoke", help="revoke the identity a key owns (self-service, one-way)")
     p.add_argument("--key", required=True, help="private JWK file of the identity to revoke")
     p.set_defaults(func=cmd_revoke)
+
+    p = sub.add_parser("serve", help="run the registry HTTP API (requires the api extra)")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8000)
+    p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("log", help="list attestations (optionally one agent's)")
     p.add_argument("--agent", default=None)
