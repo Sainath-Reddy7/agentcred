@@ -1,0 +1,135 @@
+"""Tests for the file-backed registry (v0.2).
+
+Runs under pytest, or standalone: python tests/test_registry.py
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from agentcred.crypto import write_key, generate_keypair  # noqa: E402
+from agentcred.log import append, load  # noqa: E402
+from agentcred.registry import Registry  # noqa: E402
+
+
+def setup_world(tmp: str) -> tuple[Path, Path, Path, str, str]:
+    """Seller agent + buyer counterparty, both registered."""
+    seller_key = Path(tmp) / "seller.json"
+    buyer_key = Path(tmp) / "buyer.json"
+    write_key(generate_keypair(), seller_key)
+    write_key(generate_keypair(), buyer_key)
+
+    registry = Registry(Path(tmp) / "state")
+    seller = registry.register(seller_key, display_name="invoice-bot", capabilities=("invoices.parse",))
+    buyer = registry.register(buyer_key, display_name="payer-bot")
+    return registry, seller_key, buyer_key, seller["did"], buyer["did"]
+
+
+def test_register_and_reregister_rejected():
+    with tempfile.TemporaryDirectory() as tmp:
+        registry, seller_key, _, _, _ = setup_world(tmp)
+        try:
+            registry.register(seller_key, display_name="copycat")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("same key registered twice")
+
+
+def test_attest_then_query_counts():
+    with tempfile.TemporaryDirectory() as tmp:
+        registry, _, buyer_key, seller_did, _ = setup_world(tmp)
+        for _ in range(3):
+            registry.attest(
+                seller_did, "task_completed", key_file=buyer_key, payload={"task": "invoices"}
+            )
+        registry.attest(
+            seller_did, "payment_settled", key_file=buyer_key, payload={"value_usd": 250.0}
+        )
+        result = registry.query(seller_did)
+        assert result["metrics"]["completed"] == 3
+        assert result["metrics"]["settled"] == 1
+        assert result["metrics"]["volume_usd"] == 250.0
+        assert result["identity"]["display_name"] == "invoice-bot"
+
+
+def test_unregistered_attester_rejected():
+    with tempfile.TemporaryDirectory() as tmp:
+        registry, _, _, seller_did, _ = setup_world(tmp)
+        stranger = Path(tmp) / "stranger.json"
+        write_key(generate_keypair(), stranger)
+        try:
+            registry.attest(seller_did, "task_completed", key_file=stranger)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("unregistered attester was accepted")
+
+
+def test_verify_clean_then_tampered():
+    with tempfile.TemporaryDirectory() as tmp:
+        registry, _, buyer_key, seller_did, _ = setup_world(tmp)
+        registry.attest(seller_did, "task_completed", key_file=buyer_key)
+
+        clean = registry.verify()
+        assert clean["ok"] and clean["signatures_valid"] == 1
+
+        # forge a record's entry directly in the log file
+        lines = registry.log_path.read_text(encoding="utf-8").splitlines()
+        record = json.loads(lines[0])
+        record["entry"]["type"] = "payment_settled"
+        record["entry"]["payload"] = {"value_usd": 10**9}
+        lines[0] = json.dumps(record, separators=(",", ":"), sort_keys=True)
+        registry.log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        report = registry.verify()
+        assert not report["ok"]
+        assert report["chain"] != "ok"
+
+
+def test_unknown_attester_flagged():
+    with tempfile.TemporaryDirectory() as tmp:
+        registry, _, buyer_key, seller_did, _ = setup_world(tmp)
+        registry.attest(seller_did, "task_completed", key_file=buyer_key)
+        # smuggle in a record from a did that was never registered
+        forged = {
+            "id": "att_evil",
+            "agent": seller_did,
+            "attester": "did:agentcred:deadbeefcafe",
+            "type": "task_completed",
+            "payload": {},
+            "signed_at": "2026-11-01T00:00:00Z",
+        }
+        append(registry.log_path, forged)
+        report = registry.verify()
+        assert not report["ok"]
+        assert any(p["issue"] == "unknown_attester" for p in report["problems"])
+
+
+def test_query_unknown_agent_rejected():
+    with tempfile.TemporaryDirectory() as tmp:
+        registry, _, _, _, _ = setup_world(tmp)
+        try:
+            registry.query("did:agentcred:nobody")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("query on unknown agent succeeded")
+
+
+if __name__ == "__main__":
+    failures = 0
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            try:
+                fn()
+                print(f"PASS {name}")
+            except AssertionError as exc:
+                failures += 1
+                print(f"FAIL {name}: {exc}")
+    sys.exit(1 if failures else 0)
