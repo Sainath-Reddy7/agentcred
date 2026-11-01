@@ -1,8 +1,8 @@
-"""Deterministic v0 scoring engine.
+"""Deterministic scoring engine (v0.2.1, calibrated).
 
 Implements the formula in docs/spec.md §4. Pure functions, no I/O, no
 dependencies: anyone holding the same attestation log computes the same
-score. Signature verification is out of scope until v0.2.
+score. Calibration invariants are enforced by tools/simulate.py in CI.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ def compute_metrics(
     completed = disputes_open = settled = 0
     volume_usd = 0.0
     self_attestations = 0
+    attesters: set[str] = set()
     first_seen: datetime | None = None
 
     for att in attestations:
@@ -50,6 +51,7 @@ def compute_metrics(
             volume_usd += float(att.payload.get("value_usd", 0.0) or 0.0)
         elif att.type == "dispute_opened":
             disputes_open += 1
+        attesters.add(att.attester)
         signed = _parse(att.signed_at)
         if first_seen is None or signed < first_seen:
             first_seen = signed
@@ -65,6 +67,8 @@ def compute_metrics(
         "volume_usd": round(volume_usd, 2),
         "tenure_days": round(tenure_days, 1),
         "self_attestations": self_attestations,
+        "interactions": completed + settled,
+        "distinct_attesters": len(attesters),
     }
 
 
@@ -76,24 +80,36 @@ def band_for(score: float) -> str:
 
 
 def score_agent(attestations: Iterable[Attestation], now: str | None = None) -> dict:
-    """Score an agent from its attestation log. See docs/spec.md §4."""
+    """Score an agent from its attestation log. See docs/spec.md §4.
+
+    v0.2.1 calibration: reliability pays out only in proportion to depth
+    (volume x attester diversity), so thin or single-source histories stay
+    provisional no matter how clean they look.
+    """
     m = compute_metrics(attestations, now=now)
 
-    if m["completed"] == 0 and m["settled"] == 0 and m["disputes_open"] == 0:
+    if m["interactions"] == 0 and m["disputes_open"] == 0:
         return {"score": SCORE_FLOOR, "band": band_for(SCORE_FLOOR), "metrics": m, "flags": ["unproven"]}
 
-    completion_rate = m["completed"] / max(1, m["completed"] + m["disputes_open"])
+    interactions = m["interactions"]
+    reliability = interactions / max(1, interactions + 2 * m["disputes_open"])
+    depth = min(1.0, interactions / 20) * min(1.0, m["distinct_attesters"] / 3)
+    value = min(1.0, m["volume_usd"] / 20000)
+    tenure = min(1.0, m["tenure_days"] / 180)
+    dispute_load = m["disputes_open"] / max(1, interactions)
+
     score = (
         SCORE_FLOOR
-        + 550.0 * completion_rate
-        + min(50.0, float(m["settled"]))
-        + min(50.0, m["volume_usd"] / 1000.0)
-        + min(50.0, m["tenure_days"] / 180.0)
+        + 350.0 * reliability * depth
+        + 200.0 * depth
+        + 100.0 * value
+        + 50.0 * tenure
+        - 300.0 * dispute_load
     )
-    score = round(min(score, 900.0), 1)
+    score = round(max(SCORE_FLOOR, min(900.0, score)), 1)
 
     flags: list[str] = []
-    if m["disputes_open"] > 0 and completion_rate < 0.5:
+    if m["disputes_open"] > 0 and reliability < 0.5:
         flags.append("elevated_dispute_signal")
 
     return {"score": score, "band": band_for(score), "metrics": m, "flags": flags}

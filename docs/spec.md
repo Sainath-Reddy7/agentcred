@@ -77,34 +77,59 @@ Rules:
 - Attestations are **append-only**. Corrections are new attestations, not edits.
 - Payloads must not carry secrets; they describe the event, not its contents.
 
-## 4. Trust Score (v0)
+## 4. Trust Score (v0.2.1)
 
-Deterministic, reproducible, and intentionally boring. From the attestation log
+Deterministic, reproducible, and calibrated: the shape below is validated
+against simulated agent populations (`tools/simulate.py`), which runs in CI
+and fails the build if a trust invariant breaks. From the attestation log
 of agent `a` at time `t`:
 
 ```
 completed     = count(task_completed)
-disputes_open = count(dispute_opened)
 settled       = count(payment_settled)
+disputes_open = count(dispute_opened)
 volume_usd    = sum(payload.value_usd for payment_settled)
 tenure_days   = t - first_attestation(a)
 
-completion_rate = completed / max(1, completed + disputes_open)
+interactions  = completed + settled
+distinct      = count(distinct counterparty attesters)
 
-score = 300                                    # floor: everyone starts unproven
-      + 550 * completion_rate                  # did it finish what it started
-      + min(50, settled)                       # track record volume
-      + min(50, volume_usd / 1000)             # value track record (cap $50k)
-      + min(50, tenure_days / 180)             # half-year of history maxes tenure
-score = min(score, 900)                        # hard cap; band A tops out at 900
+reliability = interactions / max(1, interactions + 2 * disputes_open)
+depth       = min(1, interactions / 20) * min(1, distinct / 3)
+value       = min(1, volume_usd / 20000)
+tenure      = min(1, tenure_days / 180)
+
+score = 300                                        # floor: everyone starts unproven
+      + 350 * reliability * depth                  # behavior, paid out only as evidence accumulates
+      + 200 * depth                                # track record: volume x attester diversity
+      + 100 * value                                # settled value
+      + 50  * tenure                               # survived time
+      - 300 * (disputes_open / max(1, interactions))
+score = clamp(score, 300, 900)
 ```
 
-**Known v0 limitation — history depth.** `completion_rate` dominates the
-formula, so a single successful interaction already yields band A. A
-one-attestation agent and a thousand-attestation agent are not meaningfully
-distinguishable yet. Fixing this is the explicit v0.4 roadmap item
-(calibration against simulated agent populations); consumers should treat
-bands from thin histories as provisional.
+Design intent, each addressing a v0.2 miscalibration:
+
+- **Thin histories stay provisional.** Reliability pays out only in
+  proportion to depth: one clean interaction tops out near 310 (band E).
+  v0.2 handed a single success 550 points and band A.
+- **Payments are reliability.** `payment_settled` feeds `reliability`, so
+  clean payment-only histories progress instead of hugging the floor.
+- **Disputes bite twice** — double-weighted inside `reliability` and
+  subtracted again as explicit dispute load.
+- **Attester diversity gates depth** (the distinct-creditor principle):
+  history from a single counterparty caps depth at one third, containing
+  two-agent sybil rings at band E. This is containment, not a solution —
+  rings of three or more colluding attesters still score; attester
+  weighting is the v0.4 follow-up.
+
+Enforced calibration invariants (see `tools/simulate.py`): fresh and
+one-shot agents hold E; established diverse agents reach A; a 50% dispute
+rate lands D; single-attester histories stay under 500.
+
+Remaining limits, deliberate and documented: no time decay yet — a
+ten-month-old attestation counts like yesterday's; dispute fault is not
+assigned (the opener's dispute weighs as much as a resolved one).
 
 Bands (credit-bureau style):
 

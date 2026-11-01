@@ -17,9 +17,9 @@
 - [ ] Sybil-resistance notes: rate-limited attestations, attester reputation bootstrapping
 
 ## v0.4 — Score maturity
-- [ ] Calibrate v0 formula against simulated agent populations
+- [x] Calibrate v0 formula against simulated agent populations (`tools/simulate.py`, enforced in CI)
 - [ ] Score decay over time (stale attestations count less)
-- [ ] Optional attester-weighting (attestations from higher-banded counterparties count more)
+- [ ] Optional attester-weighting (attestations from higher-banded counterparties count more; targets 3+ agent collusion rings)
 
 ## v1.0 — Protocol stabilization
 - [ ] Cross-implementation test vectors

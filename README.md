@@ -54,17 +54,18 @@ attestations, and derived trust scores.**
 ## Repository structure
 
 ```
-├── docs/spec.md                  # Protocol specification (v0.2)
+├── docs/spec.md                  # Protocol specification (v0.2.1)
 ├── schema/                       # JSON Schemas for identity & attestations
+├── tools/simulate.py             # Scoring calibration harness (runs in CI)
 ├── src/agentcred/
 │   ├── models.py                 # Core data objects
 │   ├── canonical.py              # Canonical JSON form (signing/hashing input)
 │   ├── crypto.py                 # Ed25519 keys, signing, verification, DIDs
 │   ├── log.py                    # Hash-chained append-only attestation log
-│   ├── scoring.py                # Deterministic scoring engine
+│   ├── scoring.py                # Calibrated scoring engine
 │   ├── registry.py               # File-backed reference registry
 │   └── cli.py                    # The `agentcred` command
-└── tests/                        # Test suite (27 tests)
+└── tests/                        # Test suite (31 tests)
 ```
 
 ## Quickstart
@@ -90,9 +91,12 @@ agentcred log                               # append-only history
 
 ## Status & roadmap
 
-v0.2 shipped: real Ed25519-signed attestations, a tamper-evident hash-chained
-log, and the CLI above. Next: registry REST API and owner-key rotation — see
-[ROADMAP.md](ROADMAP.md) and the [protocol spec](docs/spec.md).
+v0.2.1 shipped: Ed25519-signed attestations, a tamper-evident hash-chained
+log, the CLI above, and a **calibrated scoring formula** — reliability pays
+out only in proportion to evidence depth and attester diversity, so thin or
+single-source histories stay provisional (validated by the simulation
+harness in CI). Next: registry REST API, owner-key rotation, score decay —
+see [ROADMAP.md](ROADMAP.md) and the [protocol spec](docs/spec.md).
 
 ## Contributing
 

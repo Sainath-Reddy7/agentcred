@@ -1,4 +1,4 @@
-"""Tests for the v0 scoring engine.
+"""Tests for the calibrated scoring engine (v0.2.1).
 
 Runs under pytest, or standalone: python tests/test_scoring.py
 """
@@ -6,6 +6,7 @@ Runs under pytest, or standalone: python tests/test_scoring.py
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -13,20 +14,34 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from agentcred.models import Attestation  # noqa: E402
 from agentcred.scoring import band_for, compute_metrics, score_agent  # noqa: E402
 
-NOW = "2026-11-01T00:00:00Z"
+BASE = datetime(2026, 11, 1, tzinfo=timezone.utc)
+NOW = BASE.strftime("%Y-%m-%dT%H:%M:%SZ")
 AGENT = "did:agentcred:agent1"
-OTHER = "did:agentcred:counterparty1"
 
 
-def att(aid: str, type_: str, value_usd: float = 0.0) -> Attestation:
+def att(
+    aid: str,
+    type_: str,
+    value_usd: float = 0.0,
+    attester: int | str = 1,
+    days_ago: int = 150,
+) -> Attestation:
+    if isinstance(attester, int):
+        attester = f"did:agentcred:cp{attester:02d}"
+    signed = (BASE - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    payload = {"value_usd": value_usd} if value_usd else {}
     return Attestation(
-        id=aid,
-        agent=AGENT,
-        attester=OTHER,
-        type=type_,
-        signed_at="2026-06-01T00:00:00Z",
-        payload={"value_usd": value_usd} if value_usd else {},
+        id=aid, agent=AGENT, attester=attester, type=type_, signed_at=signed, payload=payload
     )
+
+
+def diverse_clean_history() -> list[Attestation]:
+    out = []
+    for i in range(40):
+        out.append(att(f"t{i}", "task_completed", attester=i % 6 + 1, days_ago=5 + 195 * i // 40))
+    for i in range(25):
+        out.append(att(f"p{i}", "payment_settled", value_usd=1200.0, attester=i % 6 + 1, days_ago=5 + 195 * i // 25))
+    return out
 
 
 def test_unproven_agent_is_band_e():
@@ -37,24 +52,56 @@ def test_unproven_agent_is_band_e():
 
 
 def test_self_attestations_do_not_count():
+    me = "did:agentcred:agent1"
     log = [
-        Attestation(id="a1", agent=AGENT, attester=AGENT, type="task_completed", signed_at="2026-06-01T00:00:00Z"),
-        Attestation(id="a2", agent=AGENT, attester=AGENT, type="payment_settled", signed_at="2026-06-01T00:00:00Z", payload={"value_usd": 500}),
+        Attestation(id="a1", agent=me, attester=me, type="task_completed", signed_at="2026-06-01T00:00:00Z"),
+        Attestation(id="a2", agent=me, attester=me, type="payment_settled", signed_at="2026-06-01T00:00:00Z", payload={"value_usd": 500}),
     ]
     result = score_agent(log, now=NOW)
     assert result["metrics"]["self_attestations"] == 2
     assert result["band"] == "E"
 
 
-def test_clean_history_reaches_b_or_better():
-    log = [att(f"a{i}", "task_completed") for i in range(40)]
-    log += [att(f"p{i}", "payment_settled", value_usd=800.0) for i in range(30)]
+def test_clean_diverse_history_reaches_a():
+    result = score_agent(diverse_clean_history(), now=NOW)
+    assert result["band"] == "A", result
+
+
+def test_single_attester_history_caps_at_c():
+    same = [
+        att(f"t{i}", "task_completed", attester=1, days_ago=5 + 195 * i // 40)
+        for i in range(40)
+    ] + [
+        att(f"p{i}", "payment_settled", value_usd=1200.0, attester=1, days_ago=5 + 195 * i // 25)
+        for i in range(25)
+    ]
+    result = score_agent(same, now=NOW)
+    assert 600 <= result["score"] < 700, result  # diversity gates depth
+
+
+def test_one_interaction_stays_provisional():
+    log = [att("t0", "task_completed"), att("p0", "payment_settled", value_usd=120.0)]
     result = score_agent(log, now=NOW)
-    assert result["band"] in ("A", "B"), result
-    assert result["metrics"]["volume_usd"] == 24000.0
+    assert result["band"] == "E"
+    assert result["score"] < 400
 
 
-def test_disputes_crush_completion_rate():
+def test_payment_only_history_progresses():
+    log = [
+        att(f"p{i}", "payment_settled", value_usd=600.0, attester=i % 4 + 1, days_ago=150)
+        for i in range(25)
+    ]
+    result = score_agent(log, now=NOW)
+    assert result["score"] >= 700, result  # payments are reliability too
+
+
+def test_sybil_pair_contained():
+    log = [att(f"t{i}", "task_completed", attester=1, days_ago=30) for i in range(25)]
+    result = score_agent(log, now=NOW)
+    assert result["score"] < 500, result  # single counterparty caps depth
+
+
+def test_disputes_crush_score():
     good = [att(f"a{i}", "task_completed") for i in range(10)]
     bad = [att(f"d{i}", "dispute_opened") for i in range(15)]
     clean = score_agent(good, now=NOW)
@@ -71,11 +118,13 @@ def test_band_boundaries():
     assert band_for(499) == "E"
 
 
-def test_metrics_volume_capping_indirectly():
+def test_metrics_report_interactions_and_diversity():
     m = compute_metrics(
-        [att("p1", "payment_settled", value_usd=200000.0)], now=NOW
+        [att("a", "task_completed", attester=1), att("b", "payment_settled", value_usd=5, attester=2)],
+        now=NOW,
     )
-    assert m["volume_usd"] == 200000.0  # metric is raw; the cap lives in the score
+    assert m["interactions"] == 2
+    assert m["distinct_attesters"] == 2
 
 
 if __name__ == "__main__":
