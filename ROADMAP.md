@@ -12,9 +12,10 @@
 - [x] CLI: `agentcred keygen | register | attest | query | verify | log`
 
 ## v0.3 — Registry API
-- [ ] REST API for register/attest/query/revoke/dispute
+- [x] REST API for register/attest/query/revoke/verify (`agentcred serve`, spec §9 — keys never leave clients)
 - [x] Identity revocation flow (self-service via key possession, enforced in both directions)
 - [ ] Owner key rotation
+- [ ] Client tooling for remote registries (CLI `--url` mode)
 - [ ] Sybil-resistance notes: rate-limited attestations, attester reputation bootstrapping
 
 ## v0.4 — Score maturity

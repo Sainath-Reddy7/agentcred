@@ -210,3 +210,40 @@ Because every record wraps its predecessor's hash, any edit, deletion, or
 reordering anywhere in history breaks the chain and is detectable by anyone
 re-walking the log. Note: the chain proves *integrity* (history unchanged),
 not *truth* (attestations honest) — the latter is the scoring layer's job.
+
+## 9. Registry HTTP API (v0.3)
+
+`agentcred serve` exposes a registry over JSON/HTTP (FastAPI reference
+implementation). One rule above all: **private keys never leave clients.**
+Clients sign locally per §7 and submit; the server verifies against
+registered public keys and commits to the §8 log.
+
+| endpoint | effect | errors |
+|---|---|---|
+| `POST /agents` | register from a public JWK → identity (201) | 400 malformed, 409 duplicate |
+| `GET /agents/{did}` | identity + trust score report | 404 unknown |
+| `GET /agents/{did}/attestations` | raw attestation history | 404 unknown |
+| `POST /attestations` | submit a fully-signed attestation | 400 invalid/unsigned/bad signature/future-dated, 404 unknown party, 409 revoked party |
+| `POST /agents/{did}/revoke` | revoke; body is a signature over `canonical({"action": "revoke", "agent": did})` | 400 bad signature, 404 unknown, 409 already revoked |
+| `GET /verify` | chain + signature audit report | — |
+| `GET /health` | liveness + version | — |
+
+Server-side rules for submitted attestations:
+
+- The attester and subject must both be registered and unrevoked.
+- The signature must verify under the attester's *registered* public key —
+  key substitution in the submitted body is irrelevant because the registry
+  ignores any key material it did not register.
+- `signed_at` must be ISO-8601 and no more than 5 minutes in the future
+  (clock-skew tolerance). Back-dating is permitted by design: attestations
+  describe past events.
+- The registry stamps its own time in the local CLI path; in the API path
+  the client's `signed_at` is authoritative within the tolerance above.
+
+Revocation over HTTP proves authority the same way everything else does —
+with a signature — since possession of the private key is the only
+authority the protocol recognizes (until v0.3 owner-key rotation).
+
+**Not provided yet** (reference deployment, not production): authentication,
+rate limiting, request signing, multi-tenant state. Sybil-resistance
+measures are the open v0.3 roadmap item.

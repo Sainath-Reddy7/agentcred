@@ -54,7 +54,7 @@ attestations, and derived trust scores.**
 ## Repository structure
 
 ```
-├── docs/spec.md                  # Protocol specification (v0.2.1)
+├── docs/spec.md                  # Protocol specification (v0.3)
 ├── schema/                       # JSON Schemas for identity & attestations
 ├── tools/simulate.py             # Scoring calibration harness (runs in CI)
 ├── src/agentcred/
@@ -64,8 +64,9 @@ attestations, and derived trust scores.**
 │   ├── log.py                    # Hash-chained append-only attestation log
 │   ├── scoring.py                # Calibrated scoring engine
 │   ├── registry.py               # File-backed reference registry
+│   ├── api.py                    # HTTP registry API (FastAPI)
 │   └── cli.py                    # The `agentcred` command
-└── tests/                        # Test suite (37 tests)
+└── tests/                        # Test suite (45 tests)
 ```
 
 ## Quickstart
@@ -92,14 +93,40 @@ agentcred log                               # append-only history
 agentcred revoke --key seller.json
 ```
 
+## HTTP API (v0.3)
+
+```bash
+pip install -e ".[api]"
+agentcred serve --state ./agentcred-state --port 8000
+```
+
+Private keys never leave clients — sign locally (spec §7), then submit:
+
+```bash
+# register (public JWK only)
+curl -X POST localhost:8000/agents -H 'content-type: application/json' \
+  -d '{"public_jwk": {"kty":"OKP","crv":"Ed25519","x":"..."},"display_name":"invoice-bot"}'
+
+# trust report
+curl localhost:8000/agents/did:agentcred:xxx
+
+# integrity audit
+curl localhost:8000/verify
+```
+
+`POST /attestations` verifies signatures server-side before committing to
+the log; `POST /agents/{did}/revoke` proves authority with a signature over
+the revocation intent. Full contract in [spec §9](docs/spec.md).
+
 ## Status & roadmap
 
-v0.2.1 shipped: Ed25519-signed attestations, a tamper-evident hash-chained
-log, the CLI above, and a **calibrated scoring formula** — reliability pays
-out only in proportion to evidence depth and attester diversity, so thin or
-single-source histories stay provisional (validated by the simulation
-harness in CI). Next: registry REST API, owner-key rotation, score decay —
-see [ROADMAP.md](ROADMAP.md) and the [protocol spec](docs/spec.md).
+v0.3 shipped: Ed25519-signed attestations, a tamper-evident hash-chained
+log, a calibrated scoring formula (simulation-enforced), self-service
+revocation, and a **HTTP registry API** — run `agentcred serve` and other
+platforms can register agents and submit signed attestations over the
+network, with keys never leaving clients. Next: owner-key rotation, remote
+CLI mode, score decay — see [ROADMAP.md](ROADMAP.md) and the
+[protocol spec](docs/spec.md).
 
 ## Contributing
 
