@@ -129,3 +129,45 @@ assignment. These are roadmap items (`ROADMAP.md`), not current behavior.
 2. How is "time" defined across registries — UTC attestation timestamps only?
 3. Minimum viable sybil-resistance for a public registry: rate limits, proof of
    unique owner, or attestation stake?
+
+## 7. Canonicalization & signatures (v0.2)
+
+All signing and hashing operate on one byte-level canonical form so any
+implementation produces identical bytes:
+
+- UTF-8 encoded JSON
+- object keys sorted lexicographically
+- no insignificant whitespace (`,` and `:` separators only)
+- non-ASCII characters preserved literally (`ensure_ascii=false`)
+
+**Signing.** The signing input is the canonical form of the attestation's
+*unsigned fields* — `id`, `agent`, `attester`, `type`, `payload`, `signed_at`.
+The signature is Ed25519 (RFC 8032) over those bytes, stored detached in the
+`signature` field as unpadded base64url.
+
+**Keys.** Ed25519 JWKs (`kty: OKP`, `crv: Ed25519`). Public keys carry `x`;
+private key files additionally carry the 32-byte seed in `d`. Agent DIDs are
+content-derived: the first 12 hex characters of SHA-256 over the public key,
+`did:agentcred:<hex>` — the same key always maps to the same DID.
+
+**Verification.** A verifier resolves the attester's DID to its registered
+public JWK, rebuilds the canonical unsigned form, and checks the signature.
+Unsigned attestations are valid to store but must fail verification.
+
+## 8. Attestation log (v0.2)
+
+Registries keep attestations in an append-only JSONL log. Each record commits
+to its predecessor:
+
+```json
+{"index": 0, "prev": "000...0", "entry": {...}, "hash": "..."}
+```
+
+- `prev` is the previous record's `hash`; the genesis record points at 64 zeroes.
+- `hash` is SHA-256 over the canonical form of `{index, prev, entry}`.
+- Records are strictly 0-indexed and append-only.
+
+Because every record wraps its predecessor's hash, any edit, deletion, or
+reordering anywhere in history breaks the chain and is detectable by anyone
+re-walking the log. Note: the chain proves *integrity* (history unchanged),
+not *truth* (attestations honest) — the latter is the scoring layer's job.
