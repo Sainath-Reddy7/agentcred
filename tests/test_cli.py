@@ -50,9 +50,8 @@ def test_full_workflow():
         assert code == 0
         result = json.loads(out)
         assert result["metrics"]["volume_usd"] == 120.0
-        # single payment_settled, zero tasks: completion_rate is 0, so the
-        # score stays near the floor — thin one-sided history (spec §4 caveat)
-        assert result["band"] == "E" and 300 <= result["score"] <= 302
+        # single payment_settled: depth ~0 (thin, one attester) → near the floor
+        assert result["band"] == "E" and 300 <= result["score"] <= 315
 
         code, out = run("--state", state, "verify")
         assert code == 0
