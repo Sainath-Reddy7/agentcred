@@ -60,3 +60,27 @@ class Attestation:
     @property
     def is_self_attestation(self) -> bool:
         return self.attester == self.agent
+
+    def unsigned_dict(self) -> dict:
+        """The fields covered by the signature (everything except it)."""
+        return {
+            "id": self.id,
+            "agent": self.agent,
+            "attester": self.attester,
+            "type": self.type,
+            "signed_at": self.signed_at,
+            "payload": self.payload,
+        }
+
+    def to_dict(self) -> dict:
+        d = self.unsigned_dict()
+        if self.signature is not None:
+            d["signature"] = self.signature
+        return d
+
+    @classmethod
+    def from_dict(cls, obj: dict) -> "Attestation":
+        fields = {k: obj[k] for k in ("id", "agent", "attester", "type", "signed_at")}
+        fields["payload"] = obj.get("payload", {})
+        fields["signature"] = obj.get("signature")
+        return cls(**fields)

@@ -7,8 +7,8 @@
 - [x] Test suite for the scoring engine
 
 ## v0.2 — Real attestations
-- [ ] Signature verification (Ed25519 / detached JWS over canonicalized payloads)
-- [ ] Attestation log format (append-only, hash-chained)
+- [x] Signature verification (Ed25519 over canonicalized payloads)
+- [x] Attestation log format (append-only, hash-chained)
 - [ ] CLI: `agentcred register | attest | query | verify`
 
 ## v0.3 — Registry API
