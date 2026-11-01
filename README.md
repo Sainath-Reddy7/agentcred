@@ -1,6 +1,7 @@
 # AgentCred
 
 <p align="center">
+  <a href="https://github.com/Sainath-Reddy7/agentcred/actions/workflows/ci.yml"><img src="https://github.com/Sainath-Reddy7/agentcred/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/status-research%20%26%20prototype-orange" alt="status">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="python">
   <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="license">
