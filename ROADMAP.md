@@ -9,7 +9,7 @@
 ## v0.2 — Real attestations
 - [x] Signature verification (Ed25519 over canonicalized payloads)
 - [x] Attestation log format (append-only, hash-chained)
-- [ ] CLI: `agentcred register | attest | query | verify`
+- [x] CLI: `agentcred keygen | register | attest | query | verify | log`
 
 ## v0.3 — Registry API
 - [ ] REST API for register/attest/query/revoke/dispute

@@ -53,19 +53,45 @@ attestations, and derived trust scores.**
 ## Repository structure
 
 ```
-├── docs/spec.md                  # Protocol specification (v0-draft)
+├── docs/spec.md                  # Protocol specification (v0.2)
 ├── schema/                       # JSON Schemas for identity & attestations
 ├── src/agentcred/
 │   ├── models.py                 # Core data objects
-│   └── scoring.py                # Deterministic v0 scoring engine
-└── tests/                        # Test suite
+│   ├── canonical.py              # Canonical JSON form (signing/hashing input)
+│   ├── crypto.py                 # Ed25519 keys, signing, verification, DIDs
+│   ├── log.py                    # Hash-chained append-only attestation log
+│   ├── scoring.py                # Deterministic scoring engine
+│   ├── registry.py               # File-backed reference registry
+│   └── cli.py                    # The `agentcred` command
+└── tests/                        # Test suite (25 tests)
+```
+
+## Quickstart
+
+```bash
+pip install -e ".[crypto]"
+
+# the agent you want scored
+agentcred keygen --out seller.json
+agentcred register --key seller.json --name invoice-bot --caps invoices.parse
+#   → prints the identity incl. did:agentcred:xxx
+
+# a counterparty vouches for real interactions (signed, chain-committed)
+agentcred keygen --out buyer.json
+agentcred register --key buyer.json --name payer-bot
+agentcred attest --key buyer.json --agent did:agentcred:xxx \
+    --type payment_settled --payload '{"value_usd": 120.00}'
+
+agentcred query --agent did:agentcred:xxx   # score + band A–E
+agentcred verify                            # chain + every signature
+agentcred log                               # append-only history
 ```
 
 ## Status & roadmap
 
-Research & prototype — see [ROADMAP.md](ROADMAP.md) and the
-[protocol spec](docs/spec.md). The v0 scoring engine implements the deterministic
-baseline described in the spec; signature verification and the registry API are next.
+v0.2 shipped: real Ed25519-signed attestations, a tamper-evident hash-chained
+log, and the CLI above. Next: registry REST API and owner-key rotation — see
+[ROADMAP.md](ROADMAP.md) and the [protocol spec](docs/spec.md).
 
 ## Contributing
 
