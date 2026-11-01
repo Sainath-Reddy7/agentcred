@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentcred.dev/schema/agent-identity.schema.json",
+  "title": "AgentCred Agent Identity",
+  "type": "object",
+  "required": ["did", "owner", "public_key", "created_at", "revoked", "version"],
+  "properties": {
+    "did": {
+      "type": "string",
+      "pattern": "^did:agentcred:[a-z0-9]+$",
+      "description": "Persistent AgentCred identifier."
+    },
+    "owner": {
+      "type": "string",
+      "description": "DID of the accountable human or organization."
+    },
+    "display_name": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z0-9_.-]+$" },
+      "uniqueItems": true
+    },
+    "public_key": {
+      "type": "object",
+      "description": "JWK (Ed25519) used to sign agent-originated events.",
+      "required": ["kty", "crv", "x"],
+      "properties": {
+        "kty": { "const": "OKP" },
+        "crv": { "const": "Ed25519" },
+        "x": { "type": "string" }
+      }
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "revoked": { "type": "boolean", "default": false },
+    "version": { "type": "integer", "minimum": 1 }
+  }
+}

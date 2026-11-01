@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentcred.dev/schema/attestation.schema.json",
+  "title": "AgentCred Attestation",
+  "type": "object",
+  "required": ["id", "agent", "attester", "type", "signed_at"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^att_[a-z0-9]+$"
+    },
+    "agent": {
+      "type": "string",
+      "pattern": "^did:agentcred:[a-z0-9]+$",
+      "description": "The agent being attested about."
+    },
+    "attester": {
+      "type": "string",
+      "description": "DID of the counterparty issuing the attestation. If equal to `agent`, the attestation is stored but has zero score weight."
+    },
+    "type": {
+      "enum": [
+        "task_completed",
+        "payment_settled",
+        "dispute_opened",
+        "dispute_resolved",
+        "capability_verified"
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "description": "Event description. Must not contain secrets.",
+      "properties": {
+        "task": { "type": "string" },
+        "value_usd": { "type": "number", "minimum": 0 },
+        "outcome": { "type": "string" },
+        "capability": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "signed_at": { "type": "string", "format": "date-time" },
+    "signature": {
+      "type": "string",
+      "description": "Detached JWS (Ed25519) over the canonicalized attestation fields, signed by the attester. Verification arrives in v0.2; v0 accepts unsigned attestations."
+    }
+  }
+}
