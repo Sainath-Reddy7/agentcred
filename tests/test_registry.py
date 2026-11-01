@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from agentcred.crypto import write_key, generate_keypair  # noqa: E402
-from agentcred.log import append, load  # noqa: E402
+from agentcred.log import append  # noqa: E402
 from agentcred.registry import Registry  # noqa: E402
 
 
@@ -109,6 +109,25 @@ def test_unknown_attester_flagged():
         report = registry.verify()
         assert not report["ok"]
         assert any(p["issue"] == "unknown_attester" for p in report["problems"])
+
+
+def test_unknown_agent_flagged():
+    with tempfile.TemporaryDirectory() as tmp:
+        registry, _, buyer_key, seller_did, _ = setup_world(tmp)
+        registry.attest(seller_did, "task_completed", key_file=buyer_key)
+        ghost = dict(registry.attestations_for(seller_did)[0].to_dict())
+        ghost["agent"] = "did:agentcred:ghost404"
+        append(registry.log_path, ghost)
+        report = registry.verify()
+        assert any(p["issue"] == "unknown_agent" for p in report["problems"])
+
+
+def test_attestation_ids_unique_same_second():
+    with tempfile.TemporaryDirectory() as tmp:
+        registry, _, buyer_key, seller_did, _ = setup_world(tmp)
+        first = registry.attest(seller_did, "task_completed", key_file=buyer_key)
+        second = registry.attest(seller_did, "task_completed", key_file=buyer_key)
+        assert first.id != second.id
 
 
 def test_query_unknown_agent_rejected():

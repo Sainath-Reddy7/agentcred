@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import base64
 import json
+from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
-from typing import Any
 
-import nacl.exceptions
 import nacl.signing
 
 from .canonical import canonical
@@ -52,7 +52,12 @@ def verify_key_from_jwk(jwk: dict) -> nacl.signing.VerifyKey:
 
 
 def write_key(jwk: dict, path: str | Path) -> None:
-    Path(path).write_text(json.dumps(jwk, indent=2), encoding="utf-8")
+    key_path = Path(path)
+    key_path.write_text(json.dumps(jwk, indent=2), encoding="utf-8")
+    try:
+        key_path.chmod(0o600)  # private material; best-effort on Windows
+    except OSError:
+        pass
 
 
 def read_key(path: str | Path) -> dict:
@@ -78,7 +83,7 @@ def sign_attestation(attestation: Attestation, private_jwk: dict) -> Attestation
     """Return a copy of the attestation carrying an Ed25519 signature over
     the canonical form of its unsigned fields."""
     signature = sign(canonical(attestation.unsigned_dict()), private_jwk)
-    return attestation.__class__(**{**attestation.__dict__, "signature": signature})
+    return replace(attestation, signature=signature)
 
 
 def verify_attestation(attestation: Attestation, jwk: dict) -> None:
@@ -94,14 +99,11 @@ def verify_attestation(attestation: Attestation, jwk: dict) -> None:
 
 def did_from_jwk(jwk: dict) -> str:
     """Content-derived agent DID: 12 hex chars of SHA-256 over the public key."""
-    import hashlib
-
-    digest = hashlib.sha256(_b64u_decode(jwk["x"])).hexdigest()[:12]
+    digest = sha256(_b64u_decode(jwk["x"])).hexdigest()[:12]
     return f"did:agentcred:{digest}"
 
 
 __all__ = [
-    "Any",
     "generate_keypair",
     "public_jwk",
     "signing_key_from_jwk",
@@ -113,5 +115,4 @@ __all__ = [
     "sign_attestation",
     "verify_attestation",
     "did_from_jwk",
-    "nacl",
 ]

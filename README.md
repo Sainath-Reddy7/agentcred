@@ -63,7 +63,7 @@ attestations, and derived trust scores.**
 │   ├── scoring.py                # Deterministic scoring engine
 │   ├── registry.py               # File-backed reference registry
 │   └── cli.py                    # The `agentcred` command
-└── tests/                        # Test suite (25 tests)
+└── tests/                        # Test suite (27 tests)
 ```
 
 ## Quickstart

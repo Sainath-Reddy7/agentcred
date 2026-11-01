@@ -13,6 +13,7 @@ arrives with v0.3 key rotation.
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -89,8 +90,7 @@ class Registry:
         if agent not in agents:
             raise ValueError(f"unknown agent {agent}")
         attestation = Attestation(
-            id=f"att_{datetime.now(timezone.utc).strftime('%H%M%S')}"
-            f"{abs(hash((agent, type_))) % 10000:04d}",
+            id=f"att_{uuid.uuid4().hex[:12]}",
             agent=agent,
             attester=attester,
             type=type_,
@@ -127,8 +127,9 @@ class Registry:
         problem."""
         problems: list[dict] = []
         chain = "ok"
-        records = load(self.log_path)
+        records = []
         try:
+            records = load(self.log_path)
             verify_chain(records)
         except LogTamperError as exc:
             chain = f"broken at record {exc.index}: {exc.reason}"
@@ -138,6 +139,11 @@ class Registry:
         valid = 0
         for record in records:
             att = Attestation.from_dict(record.entry)
+            if att.agent not in agents:
+                problems.append(
+                    {"index": record.index, "issue": "unknown_agent", "detail": att.agent}
+                )
+                continue
             jwk = agents.get(att.attester, {}).get("public_key")
             if not jwk:
                 problems.append(

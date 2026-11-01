@@ -41,7 +41,7 @@
     "signed_at": { "type": "string", "format": "date-time" },
     "signature": {
       "type": "string",
-      "description": "Detached JWS (Ed25519) over the canonicalized attestation fields, signed by the attester. Verification arrives in v0.2; v0 accepts unsigned attestations."
+      "description": "Detached Ed25519 signature over the canonical form of the unsigned fields (id, agent, attester, type, payload, signed_at), base64url-encoded without padding. Required for verification since v0.2; records without one are stored but fail verification."
     }
   }
 }
