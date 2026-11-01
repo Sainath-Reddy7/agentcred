@@ -43,10 +43,13 @@ class LogRecord:
 
     @classmethod
     def from_line(cls, line: str) -> "LogRecord":
-        obj = json.loads(line)
-        return cls(
-            index=obj["index"], prev=obj["prev"], entry=obj["entry"], hash=obj["hash"]
-        )
+        try:
+            obj = json.loads(line)
+            return cls(
+                index=obj["index"], prev=obj["prev"], entry=obj["entry"], hash=obj["hash"]
+            )
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise LogTamperError(-1, f"malformed record: {exc}") from exc
 
 
 def _record_hash(index: int, prev: str, entry: dict) -> str:

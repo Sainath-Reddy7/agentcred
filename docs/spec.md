@@ -96,8 +96,15 @@ score = 300                                    # floor: everyone starts unproven
       + min(50, settled)                       # track record volume
       + min(50, volume_usd / 1000)             # value track record (cap $50k)
       + min(50, tenure_days / 180)             # half-year of history maxes tenure
-score = score * (1 - 0.1 * unclosed_disputes_factor)   # optional, see below
+score = min(score, 900)                        # hard cap; band A tops out at 900
 ```
+
+**Known v0 limitation — history depth.** `completion_rate` dominates the
+formula, so a single successful interaction already yields band A. A
+one-attestation agent and a thousand-attestation agent are not meaningfully
+distinguishable yet. Fixing this is the explicit v0.4 roadmap item
+(calibration against simulated agent populations); consumers should treat
+bands from thin histories as provisional.
 
 Bands (credit-bureau style):
 
@@ -129,6 +136,8 @@ assignment. These are roadmap items (`ROADMAP.md`), not current behavior.
 2. How is "time" defined across registries — UTC attestation timestamps only?
 3. Minimum viable sybil-resistance for a public registry: rate limits, proof of
    unique owner, or attestation stake?
+4. Should canonicalization adopt a formal profile (e.g., RFC 8785 JCS) so
+   number formatting is byte-identical across every language?
 
 ## 7. Canonicalization & signatures (v0.2)
 
@@ -139,6 +148,9 @@ implementation produces identical bytes:
 - object keys sorted lexicographically
 - no insignificant whitespace (`,` and `:` separators only)
 - non-ASCII characters preserved literally (`ensure_ascii=false`)
+- numbers as shortest-roundtrip IEEE-754 doubles (Python `json` and
+  ECMAScript `JSON.stringify` agree; exotic float formatting may not — see
+  open questions)
 
 **Signing.** The signing input is the canonical form of the attestation's
 *unsigned fields* — `id`, `agent`, `attester`, `type`, `payload`, `signed_at`.
