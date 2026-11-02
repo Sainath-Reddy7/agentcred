@@ -118,10 +118,15 @@ def verify_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
         problems.append({"issue": "dispute_record_missing", "detail": dispute_id})
     if resolution is None:
         problems.append({"issue": "no_resolution", "detail": "bundle contains an open dispute"})
-    if dispute_id in opened and target is None:
-        problems.append(
-            {"issue": "target_record_missing", "detail": opened[dispute_id].get("target")}
-        )
+    if dispute_id in opened:
+        expected_target = opened[dispute_id].get("target")
+        if target is None or target.get("id") != expected_target:
+            # the bundle must carry the exact attestation the dispute names —
+            # otherwise a swapped-in record misattributes the whole document
+            problems.append(
+                {"issue": "target_mismatch",
+                 "detail": f"dispute targets {expected_target}, bundle carries {target.get('id') if target else None}"}
+            )
 
     return {
         "ok": not problems,

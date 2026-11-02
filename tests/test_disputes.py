@@ -222,6 +222,66 @@ def test_pile_on_cap():
             pass
 
 
+def test_bundle_rejects_swapped_target_attestation():
+    """A court document must be bound to the exact attestation it names."""
+    with tempfile.TemporaryDirectory() as tmp:
+        (registry, seller_key, buyer_key, _, seller_did, _, _, _) = setup_world(tmp, tasks=2)
+        contested = registry.attestations_for(seller_did)[0]
+        other = registry.attestations_for(seller_did)[1]
+        dsp = registry.open_dispute(contested.id, "contested", key_file=buyer_key)["id"]
+        registry.resolve_dispute(dsp, "rejected", key_files=[buyer_key, seller_key])
+
+        bundle = json.loads(json.dumps(registry.evidence_bundle(dsp)))
+        # swap in a DIFFERENT fully-valid attestation record (own hash, own signature)
+        from agentcred.log import load
+
+        other_rec = [r for r in load(registry.log_path) if r.entry.get("id") == other.id][0]
+        for i, rec in enumerate(bundle["records"]):
+            if rec["entry"].get("kind", "attestation") == "attestation":
+                bundle["records"][i] = {
+                    "index": other_rec.index, "prev": other_rec.prev,
+                    "entry": other_rec.entry, "hash": other_rec.hash,
+                }
+        report = verify_bundle(bundle)
+        assert not report["ok"]
+        assert any(p["issue"] == "target_mismatch" for p in report["problems"])
+
+
+def test_dispute_timestamps_validated():
+    with tempfile.TemporaryDirectory() as tmp:
+        (registry, seller_key, buyer_key, _, seller_did, buyer_did, _, ids) = setup_world(tmp, tasks=3)
+
+        bad_open = {
+            "kind": "dispute.opened", "id": "dsp_ts1", "target": ids[0], "agent": seller_did,
+            "opened_by": buyer_did, "reason": "x", "opened_at": "not-a-date", "arbiter": None,
+        }
+        try:
+            registry.commit_open_dispute(bad_open, ["sig"])
+            raise AssertionError("garbage opened_at accepted")
+        except ValueError:
+            pass
+
+        future_open = dict(bad_open, id="dsp_ts2", opened_at="2030-01-01T00:00:00Z")
+        try:
+            registry.commit_open_dispute(future_open, ["sig"])
+            raise AssertionError("year-2030 opened_at accepted")
+        except ValueError:
+            pass
+
+        opened = registry.open_dispute(ids[1], "ok", key_file=buyer_key)
+        missing_res = {
+            "kind": "dispute.resolved", "dispute": opened["id"], "outcome": "rejected",
+            "resolved_by": [buyer_did, seller_did],
+        }
+        try:
+            registry.commit_resolution(missing_res, ["sig", "sig"])
+            raise AssertionError("resolution without resolved_at accepted")
+        except ValueError:
+            pass
+        # the view must never crash on committed state
+        assert registry.dispute_view(opened["id"])["status"] == "open"
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

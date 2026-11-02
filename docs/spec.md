@@ -279,6 +279,9 @@ bytes the opener signs (canonical form, §7):
 ```
 
 - `agent` (the disputed party) must equal the target attestation's agent.
+- `opened_at` must be ISO-8601 UTC, no further in the future than 5
+  minutes (clock-skew tolerance, same rule as attestations); the same
+  applies to `resolved_at` on resolutions, which must be present.
 - `arbiter` is optional: a registered, unrevoked agent who is not the
   disputed party. Setting it enables arbiter mode.
 
@@ -312,9 +315,12 @@ onward. One mistake is free; a pattern is not.
 resolution, target attestation) plus the public identities needed to
 verify every signature offline (`agentcred verify-bundle`). Any third
 party — arbiter, platform, regulator — can check the document with no
-registry access. Subset bundles prove record integrity and authenticity;
-chain *membership* requires the full log, so bundles carry `meta.head` to
-anchor against a live registry.
+registry access. The verifier **binds the bundle to its target**: the
+carried attestation must be exactly the one the dispute names, so a
+swapped-in record (even one with its own valid hash and signature) fails
+with `target_mismatch`. Subset bundles prove record integrity and
+authenticity; chain *membership* requires the full log, so bundles carry
+`meta.head` to anchor against a live registry.
 
 ### Rate limits
 
