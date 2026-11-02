@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from nacl.exceptions import BadSignatureError
@@ -34,6 +34,20 @@ MAX_OPEN_DISPUTES_PER_TARGET = 3
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+TIMESTAMP_TOLERANCE = timedelta(minutes=5)
+
+
+def _valid_ts(ts: object) -> bool:
+    """ISO-8601 UTC, not further in the future than clock-skew tolerance."""
+    try:
+        when = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return False
+    if when.tzinfo is None:
+        return False
+    return when <= datetime.now(timezone.utc) + TIMESTAMP_TOLERANCE
 
 
 class Registry:
@@ -272,6 +286,8 @@ class Registry:
                 raise ValueError("the disputed agent cannot be its own arbiter")
         if self._dispute_state(core["id"]) is not None:
             raise ValueError(f"dispute {core['id']} already exists")
+        if not _valid_ts(core["opened_at"]):
+            raise ValueError("opened_at must be ISO-8601 UTC, within clock-skew tolerance of now")
         self._enforce_dispute_rate_limits(core)
         if len(signatures) != 1:
             raise ValueError("dispute.opened carries exactly one signature")
@@ -349,6 +365,8 @@ class Registry:
             raise ValueError(f"dispute {core['dispute']} is already resolved")
         if core.get("outcome") not in DISPUTE_OUTCOMES:
             raise ValueError(f"outcome must be one of {sorted(DISPUTE_OUTCOMES)}")
+        if not _valid_ts(core.get("resolved_at")):
+            raise ValueError("resolved_at must be present, ISO-8601 UTC, within clock-skew tolerance of now")
         resolved_by = core.get("resolved_by", [])
         if not resolved_by or len(signatures) != len(resolved_by):
             raise ValueError("resolved_by and signatures must be non-empty and paired 1:1")
