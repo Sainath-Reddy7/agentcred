@@ -24,6 +24,22 @@ from .models import ATTESTATION_TYPES
 from .registry import Registry
 
 
+def cmd_agents(args: argparse.Namespace) -> int:
+    for identity in Registry(args.state).agents():
+        flag = "  [revoked]" if identity["revoked"] else ""
+        print(f"{identity['did']}  {identity['display_name']}{flag}")
+    return 0
+
+
+def cmd_disputes(args: argparse.Namespace) -> int:
+    registry = Registry(args.state)
+    views = registry.disputes_for(args.agent) if args.agent else registry.all_disputes()
+    for view in views:
+        state = view["outcome"] or view["status"]
+        print(f"{view['id']}  {state:<8} agent={view['agent']}  target={view['target']}")
+    return 0
+
+
 def cmd_keygen(args: argparse.Namespace) -> int:
     jwk = generate_keypair()
     write_key(jwk, args.out)
@@ -211,6 +227,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("log", help="list attestations (optionally one agent's)")
     p.add_argument("--agent", default=None)
     p.set_defaults(func=cmd_log)
+
+    p = sub.add_parser("agents", help="list registered identities")
+    p.set_defaults(func=cmd_agents)
+
+    p = sub.add_parser("disputes", help="list disputes (optionally one agent's)")
+    p.add_argument("--agent", default=None)
+    p.set_defaults(func=cmd_disputes)
 
     return parser
 

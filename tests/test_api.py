@@ -80,6 +80,37 @@ def test_state_dir_resolves_from_env():
                 os.environ["AGENTCRED_STATE"] = old
 
 
+def test_listing_endpoints():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        _, seller_did = register(client, "seller")
+        buyer_jwk, _ = register(client, "buyer")
+
+        listed = client.get("/agents").json()["agents"]
+        assert {a["display_name"] for a in listed} == {"seller", "buyer"}
+
+        att = signed_attestation(buyer_jwk, seller_did, "task_completed")
+        posted = client.post("/attestations", json=att).json()["attestation"]
+        core = {
+            "kind": "dispute.opened",
+            "id": "dsp_list1",
+            "target": posted["id"],
+            "agent": seller_did,
+            "opened_by": did_from_jwk(buyer_jwk),
+            "reason": "listing test",
+            "opened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "arbiter": None,
+        }
+        client.post("/disputes", json=core | {"signature": sign(canonical(core), buyer_jwk)})
+
+        all_views = client.get("/disputes").json()["disputes"]
+        assert len(all_views) == 1 and all_views[0]["id"] == "dsp_list1"
+        for_seller = client.get("/disputes", params={"agent": seller_did}).json()["disputes"]
+        assert len(for_seller) == 1
+        for_buyer = client.get("/disputes", params={"agent": "did:agentcred:none"}).json()["disputes"]
+        assert for_buyer == []
+
+
 def test_register_conflict():
     with tempfile.TemporaryDirectory() as tmp:
         client = make_client(tmp)

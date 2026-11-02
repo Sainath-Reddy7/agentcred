@@ -67,7 +67,7 @@ attestations, and derived trust scores.**
 │   ├── evidence.py               # Offline evidence-bundle verifier
 │   ├── api.py                    # HTTP registry API (FastAPI)
 │   └── cli.py                    # The `agentcred` command
-└── tests/                        # Test suite (61 tests)
+└── tests/                        # Test suite (64 tests)
 ```
 
 ## Quickstart

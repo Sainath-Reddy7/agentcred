@@ -192,12 +192,15 @@ class Registry:
 
     def accusations_for(self, agent: str) -> list[dict]:
         """Dispute views for disputes `agent` opened, for accuser scoring."""
-        views = []
-        for record in self._records():
-            entry = record.entry
-            if entry.get("kind") == "dispute.opened" and entry.get("opened_by") == agent:
-                views.append(self.dispute_view(entry["id"]))
-        return views
+        return [
+            self._view_from_slot(slot)
+            for slot in self._dispute_index().values()
+            if slot.get("opened", {}).get("opened_by") == agent
+        ]
+
+    def agents(self) -> list[dict]:
+        """All registered identities, oldest first."""
+        return sorted(self._load_agents().values(), key=lambda i: i["created_at"])
 
     def query(self, agent: str) -> dict:
         identity = self._load_agents().get(agent)
@@ -302,10 +305,9 @@ class Registry:
     def _enforce_dispute_rate_limits(self, core: dict) -> None:
         """Clock-free griefing containment over currently-open disputes."""
         open_disputes = [
-            record.entry
-            for record in self._records()
-            if record.entry.get("kind") == "dispute.opened"
-            and self._dispute_state(record.entry["id"])["status"] == "open"
+            slot["opened"]
+            for slot in self._dispute_index().values()
+            if slot.get("opened") and slot.get("resolution") is None
         ]
         for opened in open_disputes:
             if opened["opened_by"] == core["opened_by"] and opened["target"] == core["target"]:
@@ -399,17 +401,24 @@ class Registry:
         append(self.log_path, entry)
         return entry
 
-    def _dispute_state(self, dispute_id: str) -> dict | None:
-        opened = None
-        resolution = None
+    def _dispute_index(self) -> dict[str, dict]:
+        """One pass over the log: {dispute_id: {"opened": entry, "resolution": entry|None}}."""
+        index: dict[str, dict] = {}
         for record in self._records():
             entry = record.entry
-            if entry.get("kind") == "dispute.opened" and entry.get("id") == dispute_id:
-                opened = entry
-            if entry.get("kind") == "dispute.resolved" and entry.get("dispute") == dispute_id:
-                resolution = entry
+            kind = entry.get("kind")
+            if kind == "dispute.opened":
+                index.setdefault(entry["id"], {})["opened"] = entry
+            elif kind == "dispute.resolved":
+                index.setdefault(entry["dispute"], {})["resolution"] = entry
+        return index
+
+    def _dispute_state(self, dispute_id: str) -> dict | None:
+        slot = self._dispute_index().get(dispute_id, {})
+        opened = slot.get("opened")
         if opened is None:
             return None
+        resolution = slot.get("resolution")
         return {
             "opened": opened,
             "resolution": resolution,
@@ -417,29 +426,38 @@ class Registry:
             "outcome": resolution["outcome"] if resolution else None,
         }
 
-    def dispute_view(self, dispute_id: str) -> dict:
-        state = self._dispute_state(dispute_id)
-        if state is None:
-            raise ValueError(f"unknown dispute {dispute_id}")
-        opened, resolution = state["opened"], state["resolution"]
+    def _view_from_slot(self, slot: dict) -> dict:
+        opened, resolution = slot["opened"], slot.get("resolution")
         view = {k: opened[k] for k in ("id", "target", "agent", "opened_by", "reason", "opened_at")}
         view["arbiter"] = opened.get("arbiter")
-        view["status"] = state["status"]
-        view["outcome"] = state["outcome"]
+        view["status"] = "resolved" if resolution else "open"
+        view["outcome"] = resolution["outcome"] if resolution else None
         if resolution:
             view["resolved_by"] = resolution["resolved_by"]
             view["resolved_at"] = resolution["resolved_at"]
         return view
 
+    def dispute_view(self, dispute_id: str) -> dict:
+        slot = self._dispute_index().get(dispute_id)
+        if not slot or "opened" not in slot:
+            raise ValueError(f"unknown dispute {dispute_id}")
+        return self._view_from_slot(slot)
+
     def disputes_for(self, agent: str) -> list[dict]:
         """Dispute views for scoring: every dispute where `agent` is the
         disputed party, with status and outcome for fault assignment."""
-        views = []
-        for record in self._records():
-            entry = record.entry
-            if entry.get("kind") == "dispute.opened" and entry.get("agent") == agent:
-                views.append(self.dispute_view(entry["id"]))
-        return views
+        return [
+            self._view_from_slot(slot)
+            for slot in self._dispute_index().values()
+            if slot.get("opened", {}).get("agent") == agent
+        ]
+
+    def all_disputes(self) -> list[dict]:
+        return [
+            self._view_from_slot(slot)
+            for slot in self._dispute_index().values()
+            if "opened" in slot
+        ]
 
     def evidence_bundle(self, dispute_id: str) -> dict:
         """Portable, self-verifying court document for one dispute.
@@ -450,11 +468,12 @@ class Registry:
         authenticity; proving *chain membership* requires the full log —
         `meta.head` lets any live registry attest to it later.
         """
-        state = self._dispute_state(dispute_id)
-        if state is None:
+        slot = self._dispute_index().get(dispute_id)
+        if not slot or "opened" not in slot:
             raise ValueError(f"unknown dispute {dispute_id}")
-        wanted: set[str] = {dispute_id}
+        target_id = slot["opened"]["target"]
         records = self._records()
+        wanted: set[str] = {dispute_id}
         subset = []
         for record in records:
             entry = record.entry
@@ -464,7 +483,7 @@ class Registry:
                 subset.append(record)
             elif (
                 entry.get("kind", "attestation") == "attestation"
-                and entry.get("id") == state["opened"]["target"]
+                and entry.get("id") == target_id
             ):
                 subset.append(record)
         agents = self._load_agents()

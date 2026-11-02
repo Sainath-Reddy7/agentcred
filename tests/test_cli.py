@@ -61,6 +61,12 @@ def test_full_workflow():
         code, out = run("--state", state, "log", "--agent", seller_did)
         assert code == 0 and "payment_settled" in out
 
+        code, out = run("--state", state, "agents")
+        assert code == 0 and seller_did in out and "invoice-bot" in out
+
+        code, out = run("--state", state, "disputes")
+        assert code == 0  # no disputes yet: empty listing, clean exit
+
 
 def test_error_exit_codes():
     with tempfile.TemporaryDirectory() as tmp:

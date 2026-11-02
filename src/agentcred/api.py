@@ -63,10 +63,12 @@ def create_app(state_dir: str | None = None) -> FastAPI:
             "name": "agentcred",
             "version": __version__,
             "endpoints": [
+                "GET /agents — list registered identities",
                 "POST /agents — register an identity (public JWK)",
                 "GET /agents/{did} — identity + trust score",
                 "GET /agents/{did}/attestations — raw history",
                 "POST /attestations — submit a signed attestation",
+                "GET /disputes — list disputes (optional ?agent=did)",
                 "POST /disputes — open a dispute over an attestation (signed)",
                 "POST /disputes/{id}/resolve — resolve (mutual or arbiter signatures)",
                 "GET /disputes/{id} — dispute view",
@@ -93,6 +95,10 @@ def create_app(state_dir: str | None = None) -> FastAPI:
             raise HTTPException(409, str(exc)) from exc
         except KeyError as exc:
             raise HTTPException(400, f"public_jwk missing field {exc}") from exc
+
+    @app.get("/agents")
+    def list_agents() -> dict:
+        return {"agents": reg().agents()}
 
     @app.get("/agents/{did}")
     def query(did: str) -> dict:
@@ -226,6 +232,12 @@ def create_app(state_dir: str | None = None) -> FastAPI:
                 code = 400
             raise HTTPException(code, message) from exc
         return {"resolved": dispute_id, "outcome": core["outcome"], "record": entry}
+
+    @app.get("/disputes")
+    def list_disputes(agent: str | None = None) -> dict:
+        registry = reg()
+        views = registry.disputes_for(agent) if agent else registry.all_disputes()
+        return {"disputes": views}
 
     @app.get("/disputes/{dispute_id}")
     def dispute_view(dispute_id: str) -> dict:
