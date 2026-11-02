@@ -67,7 +67,7 @@ attestations, and derived trust scores.**
 │   ├── evidence.py               # Offline evidence-bundle verifier
 │   ├── api.py                    # HTTP registry API (FastAPI)
 │   └── cli.py                    # The `agentcred` command
-└── tests/                        # Test suite (54 tests)
+└── tests/                        # Test suite (57 tests)
 ```
 
 ## Quickstart
@@ -142,12 +142,13 @@ the revocation intent. Full contract in [spec §9](docs/spec.md).
 
 ## Status & roadmap
 
-v0.4 shipped: Ed25519-signed attestations, tamper-evident chained logs,
-calibrated fault-aware scoring, self-service revocation, an HTTP registry
-API, and now **the court system** — structured disputes with mutual or
-arbiter resolution, fault assignment, and portable evidence bundles. Next:
-score decay, attester-weighting, escrow on settlement rails — see
-[ROADMAP.md](ROADMAP.md) and the [protocol spec](docs/spec.md).
+v0.4.1 shipped: Ed25519-signed attestations, tamper-evident chained logs,
+the **court system** (structured disputes, fault assignment, evidence
+bundles), an HTTP registry API, self-service revocation — and scoring
+with a **180-day evidence half-life** (dormant agents slide, active ones
+hold) plus a **serial-false-accuser penalty**. 12 trust invariants
+enforced in CI. Next: dispute rate limiting, escrow on settlement rails
+— see [ROADMAP.md](ROADMAP.md) and the [protocol spec](docs/spec.md).
 
 ## Contributing
 

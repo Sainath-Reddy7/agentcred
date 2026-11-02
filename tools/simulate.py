@@ -53,6 +53,32 @@ def many(
     return out
 
 
+def block(
+    prefix: str,
+    type_: str,
+    count: int,
+    attesters: int,
+    days_ago: int,
+    value_usd: float = 0.0,
+) -> list[Attestation]:
+    """Attestations clustered at roughly the same age (no spread)."""
+    out = []
+    for i in range(count):
+        attester = f"did:agentcred:cp{i % attesters + 1:02d}"
+        payload = {"value_usd": value_usd} if value_usd else {}
+        out.append(
+            Attestation(
+                id=f"{prefix}{i}",
+                agent=AGENT,
+                attester=attester,
+                type=type_,
+                signed_at=ts(days_ago + i % 7),
+                payload=payload,
+            )
+        )
+    return out
+
+
 SCENARIOS = [
     (
         "fresh_honest",
@@ -118,6 +144,26 @@ SCENARIOS = [
         lambda r: r["band"] == "C",
         "false accusations cost the accused nothing (same band as clean)",
     ),
+    (
+        "stale_history_decays",
+        lambda: block("st", "task_completed", 25, 4, 365)
+        + block("stp", "payment_settled", 5, 4, 365),
+        lambda r: r["score"] < 600,
+        "a one-year-old history loses depth (180-day half-life): D or worse",
+    ),
+    (
+        "active_history_maintains",
+        lambda: block("ac", "task_completed", 25, 4, 10)
+        + block("acp", "payment_settled", 5, 4, 10),
+        lambda r: r["score"] >= 700,
+        "the same history kept active holds B or better",
+    ),
+    (
+        "serial_false_accuser_penalized",
+        lambda: (many("fa", "task_completed", 12, 3, 60), [], 3),
+        lambda r: "serial_false_accuser" in r["flags"] and r["score"] < 600,
+        "three rejected accusations: flagged and dropped out of band C",
+    ),
 ]
 
 
@@ -129,10 +175,14 @@ def main() -> int:
     for name, build, check, why in SCENARIOS:
         built = build()
         if isinstance(built, tuple):
-            attestations, disputes = built
+            attestations = built[0]
+            disputes = built[1] if len(built) > 1 else None
+            false_accusations = built[2] if len(built) > 2 else 0
         else:
-            attestations, disputes = built, None
-        result = score_agent(attestations, now=NOW, disputes=disputes)
+            attestations, disputes, false_accusations = built, None, 0
+        result = score_agent(
+            attestations, now=NOW, disputes=disputes, false_accusations=false_accusations
+        )
         m = result["metrics"]
         ok = check(result)
         if not ok:
@@ -144,7 +194,8 @@ def main() -> int:
         )
     known_limits = (
         "\nknown limits (documented, not solved): collusion rings of >=3 attesters"
-        "\nstill score; no time decay for stale histories yet (roadmap v0.4)."
+        "\nstill score — attester weighting needs outside anchors (open problem);"
+        "\nmass dispute-opening is unfettered until rate limiting lands."
     )
     print(known_limits if failures == 0 else "")
     print(f"\n{len(SCENARIOS) - failures}/{len(SCENARIOS)} invariants hold")

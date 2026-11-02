@@ -79,7 +79,7 @@ Rules:
 - Attestations are **append-only**. Corrections are new attestations, not edits.
 - Payloads must not carry secrets; they describe the event, not its contents.
 
-## 4. Trust Score (v0.2.1)
+## 4. Trust Score (v0.4)
 
 Deterministic, reproducible, and calibrated: the shape below is validated
 against simulated agent populations (`tools/simulate.py`), which runs in CI
@@ -98,17 +98,21 @@ distinct      = count(distinct counterparty attesters)
 total_disputes = disputes_open + structured_open + disputes_upheld
                  (rejected/settled disputes are lifted — see §10)
 
+age_weight(a) = 0.5 ** (age_days(a) / 180)   # evidence half-life: 180 days
+effective     = sum(age_weight over task/payment attestations)
+
 reliability = interactions / max(1, interactions + 2 * total_disputes)
-depth       = min(1, interactions / 20) * min(1, distinct / 3)
+depth       = min(1, effective / 20) * min(1, distinct / 3)
 value       = min(1, volume_usd / 20000)
 tenure      = min(1, tenure_days / 180)
 
 score = 300                                        # floor: everyone starts unproven
       + 350 * reliability * depth                  # behavior, paid out only as evidence accumulates
-      + 200 * depth                                # track record: volume x attester diversity
+      + 200 * depth                                # track record: decayed volume x attester diversity
       + 100 * value                                # settled value
       + 50  * tenure                               # survived time
       - 300 * min(1, total_disputes / max(1, interactions))
+      - 100 * min(1, false_accusations / 3)        # serial false accusers (§10)
 score = clamp(score, 300, 900)
 ```
 
@@ -126,14 +130,21 @@ Design intent, each addressing a v0.2 miscalibration:
   two-agent sybil rings at band E. This is containment, not a solution —
   rings of three or more colluding attesters still score; attester
   weighting is the v0.4 follow-up.
+- **Evidence decays; quality doesn't.** Interaction counts decay with a
+  180-day half-life (`effective` feeds depth) while reliability and
+  dispute load use raw history. A two-year-old success still proves
+  honesty — it just proves less of it. Dormant agents slide down the
+  bands; agents that keep transacting hold theirs.
 
 Enforced calibration invariants (see `tools/simulate.py`): fresh and
 one-shot agents hold E; established diverse agents reach A; a 50% dispute
-rate lands D; single-attester histories stay under 500.
+rate lands D; single-attester histories stay under 500; a one-year-stale
+history drops below 600 while the same history kept active holds 700+;
+serial false accusers are flagged and demoted.
 
-Remaining limits, deliberate and documented: no time decay yet — a
-ten-month-old attestation counts like yesterday's; false accusers pay
-nothing for rejected disputes (accuser penalties are roadmap); raw v0.2
+Remaining limits, deliberate and documented: attester weighting is an
+open problem — pure peer-standing cannot distinguish a 3-agent collusion
+ring from an honest cluster without outside anchors (§6); raw v0.2
 `dispute_opened` attestations still count 1x alongside structured
 disputes.
 
@@ -147,8 +158,8 @@ Bands (credit-bureau style):
 | D | 500–599 | weak; elevated dispute signal |
 | E | < 500 or no attestations | unproven or risky |
 
-v0 deliberately omits: score decay, attester weighting, dispute fault
-assignment. These are roadmap items (`ROADMAP.md`), not current behavior.
+v0 deliberately omits: attester weighting (open problem, §6) and
+dispute rate limiting. See `ROADMAP.md`.
 
 ## 5. Threat model (informal, v0)
 
@@ -289,7 +300,10 @@ Core fields, with `signatures` paired 1:1 with `resolved_by`:
 Upheld and still-open disputes count against the agent (§4); rejected and
 settled ones are lifted — a false accusation costs the accused nothing.
 Referencing a specific attestation is what makes fault assignment
-possible at all.
+possible at all. The price of a false accusation lands on the *opener*:
+each rejected dispute counts toward `false_accusations`, costing 100
+points per third (max −100) and a `serial_false_accuser` flag from two
+onward. One mistake is free; a pattern is not.
 
 ### Evidence bundles
 
@@ -305,6 +319,5 @@ anchor against a live registry.
 ### Honest limits
 
 No dispute rate limiting yet (griefing vector: mass-opening disputes —
-they count provisionally while open); no penalty for serial false
-accusers; no escrow/settlement integration (x402/AP2 rails are a
-separate roadmap item).
+they count provisionally while open); no escrow/settlement integration
+(x402/AP2 rails are a separate roadmap item).

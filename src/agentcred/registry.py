@@ -172,13 +172,28 @@ class Registry:
 
     # -- queries --------------------------------------------------------
 
+    def accusations_for(self, agent: str) -> list[dict]:
+        """Dispute views for disputes `agent` opened, for accuser scoring."""
+        views = []
+        for record in self._records():
+            entry = record.entry
+            if entry.get("kind") == "dispute.opened" and entry.get("opened_by") == agent:
+                views.append(self.dispute_view(entry["id"]))
+        return views
+
     def query(self, agent: str) -> dict:
         identity = self._load_agents().get(agent)
         if identity is None:
             raise ValueError(f"unknown agent {agent}")
+        false_accusations = sum(
+            1
+            for d in self.accusations_for(agent)
+            if d["outcome"] == "rejected"
+        )
         result = score_agent(
             self.attestations_for(agent),
             disputes=self.disputes_for(agent),
+            false_accusations=false_accusations,
         )
         result["identity"] = identity
         if identity.get("revoked"):
