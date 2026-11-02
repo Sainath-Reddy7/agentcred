@@ -133,6 +133,28 @@ def test_metrics_report_interactions_and_diversity():
     )
     assert m["interactions"] == 2
     assert m["distinct_attesters"] == 2
+    assert m["effective_interactions"] > 0
+
+
+def test_decay_discounts_stale_evidence():
+    fresh = [att(f"f{i}", "task_completed", attester=i % 4 + 1, days_ago=10) for i in range(25)]
+    stale = [att(f"s{i}", "task_completed", attester=i % 4 + 1, days_ago=365) for i in range(25)]
+    fresh_r = score_agent(fresh, now=NOW)
+    stale_r = score_agent(stale, now=NOW)
+    assert fresh_r["score"] - stale_r["score"] > 100
+    assert stale_r["metrics"]["effective_interactions"] < stale_r["metrics"]["interactions"]
+
+
+def test_false_accusations_penalized_and_flagged():
+    base = [att(f"t{i}", "task_completed", attester=i % 3 + 1, days_ago=60) for i in range(12)]
+    clean = score_agent(base, now=NOW)
+    guilty = score_agent(base, now=NOW, false_accusations=3)
+    assert guilty["score"] < clean["score"]
+    assert "serial_false_accuser" in guilty["flags"]
+    assert guilty["metrics"]["false_accusations"] == 3
+    # one mistake is human: no flag below two
+    one_off = score_agent(base, now=NOW, false_accusations=1)
+    assert "serial_false_accuser" not in one_off["flags"]
 
 
 if __name__ == "__main__":

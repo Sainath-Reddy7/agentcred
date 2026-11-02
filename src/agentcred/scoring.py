@@ -13,6 +13,7 @@ from typing import Iterable
 from .models import Attestation
 
 SCORE_FLOOR = 300
+EVIDENCE_HALF_LIFE_DAYS = 180.0
 BANDS = (
     ("A", 800),
     ("B", 700),
@@ -37,6 +38,7 @@ def compute_metrics(
     completed = disputes_open = settled = 0
     volume_usd = 0.0
     self_attestations = 0
+    effective_interactions = 0.0
     attesters: set[str] = set()
     first_seen: datetime | None = None
 
@@ -55,6 +57,11 @@ def compute_metrics(
         signed = _parse(att.signed_at)
         if first_seen is None or signed < first_seen:
             first_seen = signed
+        if att.type in ("task_completed", "payment_settled"):
+            age_days = max(0.0, (now_dt - signed).total_seconds() / 86400.0)
+            effective_interactions += min(
+                1.0, 0.5 ** (age_days / EVIDENCE_HALF_LIFE_DAYS)
+            )
 
     tenure_days = 0.0
     if first_seen is not None and first_seen <= now_dt:
@@ -68,6 +75,7 @@ def compute_metrics(
         "tenure_days": round(tenure_days, 1),
         "self_attestations": self_attestations,
         "interactions": completed + settled,
+        "effective_interactions": round(effective_interactions, 2),
         "distinct_attesters": len(attesters),
     }
 
@@ -102,6 +110,7 @@ def score_agent(
     attestations: Iterable[Attestation],
     now: str | None = None,
     disputes: Iterable[dict] | None = None,
+    false_accusations: int = 0,
 ) -> dict:
     """Score an agent from its attestation log and structured disputes.
 
@@ -115,17 +124,19 @@ def score_agent(
     m["disputes_structured_open"] = dv["open"]
     m["disputes_upheld"] = dv["upheld"]
     m["disputes_lifted"] = dv["lifted"]
+    m["false_accusations"] = false_accusations
     total_disputes = m["disputes_open"] + dv["open"] + dv["upheld"]
 
-    if m["interactions"] == 0 and total_disputes == 0:
+    if m["interactions"] == 0 and total_disputes == 0 and false_accusations == 0:
         return {"score": SCORE_FLOOR, "band": band_for(SCORE_FLOOR), "metrics": m, "flags": ["unproven"]}
 
     interactions = m["interactions"]
     reliability = interactions / max(1, interactions + 2 * total_disputes)
-    depth = min(1.0, interactions / 20) * min(1.0, m["distinct_attesters"] / 3)
+    depth = min(1.0, m["effective_interactions"] / 20) * min(1.0, m["distinct_attesters"] / 3)
     value = min(1.0, m["volume_usd"] / 20000)
     tenure = min(1.0, m["tenure_days"] / 180)
     dispute_load = min(1.0, total_disputes / max(1, interactions))
+    accuser_load = min(1.0, false_accusations / 3)
 
     score = (
         SCORE_FLOOR
@@ -134,11 +145,14 @@ def score_agent(
         + 100.0 * value
         + 50.0 * tenure
         - 300.0 * dispute_load
+        - 100.0 * accuser_load
     )
     score = round(max(SCORE_FLOOR, min(900.0, score)), 1)
 
     flags: list[str] = []
     if total_disputes > 0 and reliability < 0.5:
         flags.append("elevated_dispute_signal")
+    if false_accusations >= 2:
+        flags.append("serial_false_accuser")
 
     return {"score": score, "band": band_for(score), "metrics": m, "flags": flags}

@@ -154,6 +154,27 @@ def test_registry_verify_covers_dispute_records():
         assert report["signatures_valid"] == 4  # attestation + opening + 2 resolvers
 
 
+def test_false_accuser_penalized_in_query():
+    with tempfile.TemporaryDirectory() as tmp:
+        (registry, seller_key, buyer_key, arbiter_key, seller_did, buyer_did, arbiter_did, ids) = setup_world(tmp, tasks=10)
+        # give the buyer (accuser) a real history from two counterparties
+        for _ in range(5):
+            registry.attest(buyer_did, "task_completed", key_file=seller_key)
+            registry.attest(buyer_did, "task_completed", key_file=arbiter_key)
+        clean = registry.query(buyer_did)
+
+        for target in ids[:2]:
+            dsp = registry.open_dispute(target, "fabricated", key_file=buyer_key)["id"]
+            registry.resolve_dispute(dsp, "rejected", key_files=[buyer_key, seller_key])
+
+        guilty = registry.query(buyer_did)
+        assert guilty["metrics"]["false_accusations"] == 2
+        assert "serial_false_accuser" in guilty["flags"]
+        assert guilty["score"] < clean["score"]
+        # the accused is untouched by rejected accusations
+        assert registry.query(seller_did)["metrics"]["disputes_lifted"] == 2
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
