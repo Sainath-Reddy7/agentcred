@@ -24,7 +24,7 @@
 - [x] Score decay over time (180-day evidence half-life in depth; quality metrics untouched)
 - [x] False-accuser penalty for rejected disputes + `serial_false_accuser` flag
 - [ ] Attester-weighting — open problem: peer-standing alone can't split collusion rings from honest clusters without outside anchors
-- [ ] Dispute rate limiting
+- [x] Dispute rate limiting (duplicate + opener-cap + pile-on-cap, clock-free)
 - [ ] Escrow conditions on settlement rails (x402/AP2 integration)
 
 ## v1.0 — Protocol stabilization

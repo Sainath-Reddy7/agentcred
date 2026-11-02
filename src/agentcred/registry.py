@@ -26,6 +26,10 @@ from .models import Attestation
 from .scoring import score_agent
 
 DISPUTE_OUTCOMES = frozenset({"upheld", "rejected", "settled"})
+# Griefing containment (spec §10): while open, disputes count provisionally
+# against the accused — so mass-opening must not be free.
+MAX_OPEN_DISPUTES_PER_OPENER = 5
+MAX_OPEN_DISPUTES_PER_TARGET = 3
 
 
 def _now() -> str:
@@ -268,6 +272,7 @@ class Registry:
                 raise ValueError("the disputed agent cannot be its own arbiter")
         if self._dispute_state(core["id"]) is not None:
             raise ValueError(f"dispute {core['id']} already exists")
+        self._enforce_dispute_rate_limits(core)
         if len(signatures) != 1:
             raise ValueError("dispute.opened carries exactly one signature")
         try:
@@ -277,6 +282,34 @@ class Registry:
         entry = core | {"signatures": list(signatures)}
         append(self.log_path, entry)
         return entry
+
+    def _enforce_dispute_rate_limits(self, core: dict) -> None:
+        """Clock-free griefing containment over currently-open disputes."""
+        open_disputes = [
+            record.entry
+            for record in self._records()
+            if record.entry.get("kind") == "dispute.opened"
+            and self._dispute_state(record.entry["id"])["status"] == "open"
+        ]
+        for opened in open_disputes:
+            if opened["opened_by"] == core["opened_by"] and opened["target"] == core["target"]:
+                raise ValueError(
+                    f"opener already has an open dispute over {core['target']}"
+                )
+        opener_load = sum(
+            1 for o in open_disputes if o["opened_by"] == core["opened_by"]
+        )
+        if opener_load >= MAX_OPEN_DISPUTES_PER_OPENER:
+            raise ValueError(
+                f"opener {core['opened_by']} already holds "
+                f"{MAX_OPEN_DISPUTES_PER_OPENER} open disputes"
+            )
+        target_load = sum(1 for o in open_disputes if o["target"] == core["target"])
+        if target_load >= MAX_OPEN_DISPUTES_PER_TARGET:
+            raise ValueError(
+                f"attestation {core['target']} already has "
+                f"{MAX_OPEN_DISPUTES_PER_TARGET} open disputes"
+            )
 
     def resolve_dispute(
         self, dispute: str, outcome: str, key_files: list[str | Path]
