@@ -1,0 +1,15 @@
+# Render blueprint — deploy with: render blueprint launch
+# (or import this repo in the Render dashboard)
+services:
+  - type: web
+    name: agentcred-registry
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    disk: # registry state must survive restarts
+      name: agentcred-state
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: AGENTCRED_STATE
+        value: /data

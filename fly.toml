@@ -1,0 +1,25 @@
+# Fly.io config — deploy with: fly launch && fly deploy
+app = "agentcred-registry"
+primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  AGENTCRED_STATE = "/data"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = false # a registry must stay up
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.checks]
+    path = "/health"
+    interval = "30s"
+    timeout = "5s"
+
+[mounts]
+  source = "agentcred_state"
+  destination = "/data"

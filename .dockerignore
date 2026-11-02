@@ -1,0 +1,11 @@
+.git/
+.github/
+tests/
+tools/
+docs/
+schema/
+agentcred-state/
+*.key.json
+__pycache__/
+*.pyc
+.venv/

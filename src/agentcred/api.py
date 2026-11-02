@@ -11,6 +11,7 @@ deployment, not a production service (sybil-resistance is roadmap v0.3).
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -41,7 +42,11 @@ def _parse_ts(ts: str) -> datetime:
     return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
-def create_app(state_dir: str = "agentcred-state") -> FastAPI:
+def create_app(state_dir: str | None = None) -> FastAPI:
+    """Build the registry app. State directory resolution: explicit
+    argument, then AGENTCRED_STATE, then ./agentcred-state."""
+    if state_dir is None:
+        state_dir = os.environ.get("AGENTCRED_STATE", "agentcred-state")
     app = FastAPI(
         title="AgentCred registry",
         version=__version__,
