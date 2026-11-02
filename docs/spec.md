@@ -316,8 +316,18 @@ registry access. Subset bundles prove record integrity and authenticity;
 chain *membership* requires the full log, so bundles carry `meta.head` to
 anchor against a live registry.
 
+### Rate limits
+
+Open disputes count provisionally against the accused, so mass-opening
+must not be free. Three clock-free rules, enforced at commit:
+
+- one open dispute per (opener, target) — no duplicate piling by the
+  same party;
+- at most **5 open disputes per opener** at a time (resolving frees
+  capacity);
+- at most **3 open disputes per attestation** across all openers.
+
 ### Honest limits
 
-No dispute rate limiting yet (griefing vector: mass-opening disputes —
-they count provisionally while open); no escrow/settlement integration
-(x402/AP2 rails are a separate roadmap item).
+No escrow/settlement integration (x402/AP2 rails are a separate roadmap
+item); limits are per-registry, not cross-registry.

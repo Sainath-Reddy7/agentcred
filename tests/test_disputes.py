@@ -175,6 +175,53 @@ def test_false_accuser_penalized_in_query():
         assert registry.query(seller_did)["metrics"]["disputes_lifted"] == 2
 
 
+def test_duplicate_open_dispute_rejected():
+    with tempfile.TemporaryDirectory() as tmp:
+        (registry, _, buyer_key, _, _, _, _, ids) = setup_world(tmp, tasks=2)
+        registry.open_dispute(ids[0], "bad", key_file=buyer_key)
+        try:
+            registry.open_dispute(ids[0], "again", key_file=buyer_key)
+            raise AssertionError("duplicate open dispute accepted")
+        except ValueError:
+            pass
+
+
+def test_opener_cap_and_release_on_resolution():
+    with tempfile.TemporaryDirectory() as tmp:
+        (registry, seller_key, buyer_key, _, seller_did, _, _, ids) = setup_world(tmp, tasks=6)
+        opened = [
+            registry.open_dispute(target, "g", key_file=buyer_key)["id"]
+            for target in ids[:5]
+        ]
+        try:
+            registry.open_dispute(ids[5], "one too many", key_file=buyer_key)
+            raise AssertionError("sixth open dispute accepted")
+        except ValueError:
+            pass
+        # resolving frees capacity
+        registry.resolve_dispute(opened[0], "settled", key_files=[buyer_key, seller_key])
+        registry.open_dispute(ids[5], "ok now", key_file=buyer_key)
+
+
+def test_pile_on_cap():
+    with tempfile.TemporaryDirectory() as tmp:
+        (registry, seller_key, buyer_key, _, seller_did, buyer_did, _, ids) = setup_world(tmp, tasks=1)
+        witnesses = []
+        for n in range(4):
+            key = Path(tmp) / f"w{n}.json"
+            write_key(generate_keypair(), key)
+            witnesses.append(key)
+            registry.register(key, display_name=f"witness{n}")
+        # three distinct openers may pile on; the fourth is refused
+        for key in [buyer_key] + witnesses[:2]:
+            registry.open_dispute(ids[0], "pile on", key_file=key)
+        try:
+            registry.open_dispute(ids[0], "too many", key_file=witnesses[3])
+            raise AssertionError("fourth open dispute on one target accepted")
+        except ValueError:
+            pass
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
