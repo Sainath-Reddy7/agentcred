@@ -235,10 +235,16 @@ registered public keys and commits to the §8 log.
 
 | endpoint | effect | errors |
 |---|---|---|
+| `GET /agents` | list registered identities | — |
 | `POST /agents` | register from a public JWK → identity (201) | 400 malformed, 409 duplicate |
 | `GET /agents/{did}` | identity + trust score report | 404 unknown |
 | `GET /agents/{did}/attestations` | raw attestation history | 404 unknown |
 | `POST /attestations` | submit a fully-signed attestation | 400 invalid/unsigned/bad signature/future-dated, 404 unknown party, 409 revoked party |
+| `GET /disputes` | list disputes (optional `?agent=did` filter) | — |
+| `POST /disputes` | open a dispute over an attestation | 400 invalid/bad signature/rate-limited, 404 unknown party, 409 revoked |
+| `POST /disputes/{id}/resolve` | resolve (mutual or arbiter signatures) | 400 bad signature/coverage, 404 unknown, 409 already resolved |
+| `GET /disputes/{id}` | dispute view | 404 unknown |
+| `GET /disputes/{id}/evidence` | portable evidence bundle | 404 unknown |
 | `POST /agents/{did}/revoke` | revoke; body is a signature over `canonical({"action": "revoke", "agent": did})` | 400 bad signature, 404 unknown, 409 already revoked |
 | `GET /verify` | chain + signature audit report | — |
 | `GET /health` | liveness + version | — |
