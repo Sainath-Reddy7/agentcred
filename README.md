@@ -67,7 +67,7 @@ attestations, and derived trust scores.**
 │   ├── evidence.py               # Offline evidence-bundle verifier
 │   ├── api.py                    # HTTP registry API (FastAPI)
 │   └── cli.py                    # The `agentcred` command
-└── tests/                        # Test suite (57 tests)
+└── tests/                        # Test suite (61 tests)
 ```
 
 ## Quickstart
@@ -139,6 +139,26 @@ curl localhost:8000/verify
 `POST /attestations` verifies signatures server-side before committing to
 the log; `POST /agents/{did}/revoke` proves authority with a signature over
 the revocation intent. Full contract in [spec §9](docs/spec.md).
+
+## Deploy
+
+The registry is **stateful** — it needs a persistent disk, so run it where
+volumes exist (not serverless):
+
+```bash
+# Docker anywhere
+docker build -t agentcred .
+docker run -p 8000:8000 -v agentcred-state:/data agentcred
+
+# Render (blueprint with persistent disk + /health checks)
+render blueprint launch
+
+# Fly.io (volume + health checks preconfigured)
+fly launch && fly deploy
+```
+
+State directory resolution: explicit argument → `AGENTCRED_STATE` env →
+`./agentcred-state`.
 
 ## Status & roadmap
 

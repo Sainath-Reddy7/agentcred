@@ -59,6 +59,27 @@ def test_index_and_health():
         assert client.get("/health").json()["ok"] is True
 
 
+def test_state_dir_resolves_from_env():
+    import os
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state = str(Path(tmp) / "from-env")
+        old = os.environ.get("AGENTCRED_STATE")
+        os.environ["AGENTCRED_STATE"] = state
+        try:
+            client = TestClient(create_app())  # no explicit dir → env
+            jwk = generate_keypair()
+            public = {k: jwk[k] for k in ("kty", "crv", "x")}
+            response = client.post("/agents", json={"public_jwk": public})
+            assert response.status_code == 201
+            assert Path(state, "agents.json").exists()
+        finally:
+            if old is None:
+                os.environ.pop("AGENTCRED_STATE", None)
+            else:
+                os.environ["AGENTCRED_STATE"] = old
+
+
 def test_register_conflict():
     with tempfile.TemporaryDirectory() as tmp:
         client = make_client(tmp)
