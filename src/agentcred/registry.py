@@ -77,6 +77,17 @@ class Registry:
             read_key(key_file), display_name=display_name, capabilities=capabilities
         )
 
+    def did_for_key(self, jwk: dict) -> str | None:
+        """Which registered identity does this key (private or public JWK)
+        belong to? Matches on the public half, so it keeps working after
+        key rotation — a rotated identity's DID no longer equals the
+        content-DID of its current key."""
+        public = {k: jwk[k] for k in ("kty", "crv", "x")}
+        for did, identity in self._load_agents().items():
+            if identity["public_key"] == public:
+                return did
+        return None
+
     def register_jwk(
         self,
         jwk: dict,
@@ -86,6 +97,10 @@ class Registry:
         """Register an identity from a JWK (private file or public-only)."""
         did = did_from_jwk(jwk)
         agents = self._load_agents()
+        public = {k: jwk[k] for k in ("kty", "crv", "x")}
+        for existing in agents.values():
+            if existing["public_key"] == public:
+                raise ValueError(f"key already registered as {existing['did']}")
         if did in agents:
             raise ValueError(f"{did} is already registered")
         identity = {
@@ -108,14 +123,13 @@ class Registry:
     def revoke(self, did: str, key_file: str | Path) -> dict:
         """Self-service, one-way revocation.
 
-        Possession of the identity's private key is the authority to revoke
-        it (owner-key binding arrives with v0.3 rotation). History is kept;
-        the identity is excluded from new attestations in both directions.
+        Possession of the identity's current private key is the authority
+        to revoke it. History is kept; the identity is excluded from new
+        attestations in both directions.
         """
-        jwk = read_key(key_file)
-        holder = did_from_jwk(jwk)
+        holder = self.did_for_key(read_key(key_file))
         if holder != did:
-            raise ValueError(f"key belongs to {holder}, not {did}")
+            raise ValueError(f"key belongs to {holder or 'no registered identity'}, not {did}")
         return self.revoke_identity(did)
 
     def revoke_identity(self, did: str) -> dict:
@@ -133,6 +147,71 @@ class Registry:
         self._save_agents(agents)
         return identity
 
+    # -- key rotation (v0.5) ---------------------------------------------
+
+    def rotate(self, did: str, key_file: str | Path, new_key_file: str | Path) -> dict:
+        """Rotate an identity's key: old key authorizes, new key takes over.
+
+        The DID stays pinned — it names the identity, not the key. The
+        rotation is recorded on the chain as a `key.rotated` record signed
+        by the OLD key, carrying the old public JWK so the record remains
+        verifiable after the registry no longer knows that key.
+        """
+        old_jwk = read_key(key_file)
+        new_jwk = read_key(new_key_file)
+        holder = self.did_for_key(old_jwk)
+        if holder != did:
+            raise ValueError(
+                f"key belongs to {holder or 'no registered identity'}, not {did}"
+            )
+        core = {
+            "kind": "key.rotated",
+            "agent": did,
+            "old_public_jwk": self._load_agents()[did]["public_key"],
+            "new_public_jwk": {k: new_jwk[k] for k in ("kty", "crv", "x")},
+            "rotated_at": _now(),
+        }
+        signature = sign(canonical(core), old_jwk)
+        self.commit_rotation_record(core, [signature])
+        return self._load_agents()[did]
+
+    def commit_rotation_record(self, core: dict, signatures: list[str]) -> dict:
+        """Verify and apply a pre-signed key rotation (API path)."""
+        agents = self._load_agents()
+        did = core.get("agent")
+        identity = agents.get(did)
+        if identity is None:
+            raise ValueError(f"unknown agent {did}")
+        if identity["revoked"]:
+            raise ValueError(f"{did} is revoked")
+        if core.get("kind") != "key.rotated":
+            raise ValueError("expected a key.rotated record")
+        for field in ("old_public_jwk", "new_public_jwk", "rotated_at"):
+            if field not in core:
+                raise ValueError(f"key.rotated missing field {field}")
+        if core["old_public_jwk"] != identity["public_key"]:
+            raise ValueError("old_public_jwk does not match the registered key")
+        if core["new_public_jwk"] == core["old_public_jwk"]:
+            raise ValueError("new key equals the current key")
+        if not _valid_ts(core["rotated_at"]):
+            raise ValueError("rotated_at must be ISO-8601 UTC, within clock-skew tolerance of now")
+        for other_did, other in agents.items():
+            if other_did != did and other["public_key"] == core["new_public_jwk"]:
+                raise ValueError(f"new key already belongs to {other_did}")
+        if len(signatures) != 1:
+            raise ValueError("key.rotated carries exactly one signature")
+        try:
+            verify(canonical(core), signatures[0], identity["public_key"])
+        except BadSignatureError as exc:
+            raise ValueError(f"rotation signature does not verify: {exc}") from exc
+        append(self.log_path, core | {"signatures": list(signatures)})
+        identity["public_key"] = core["new_public_jwk"]
+        identity["rotated_at"] = core["rotated_at"]
+        identity["version"] += 1
+        agents[did] = identity
+        self._save_agents(agents)
+        return core | {"signatures": list(signatures)}
+
     # -- attestations ---------------------------------------------------
 
     def attest(
@@ -144,10 +223,15 @@ class Registry:
     ) -> Attestation:
         """Build, sign, and commit an attestation from an attester key file."""
         jwk = read_key(key_file)
+        attester = self.did_for_key(jwk)
+        if attester is None:
+            raise ValueError(
+                "attester key is not registered — register the key first"
+            )
         attestation = Attestation(
             id=f"att_{uuid.uuid4().hex[:12]}",
             agent=agent,
-            attester=did_from_jwk(jwk),
+            attester=attester,
             type=type_,
             signed_at=_now(),
             payload=payload or {},
@@ -549,13 +633,39 @@ class Registry:
         valid = 0
         opened_seen: set[str] = set()
 
+        # Key timeline: which public key was valid for each agent at each
+        # chain position. Rotation records carry the old key precisely so
+        # that ALL history stays verifiable after a key change — an
+        # attestation signed by a pre-rotation key must check against the
+        # pre-rotation key, not the current one.
+        rotation_timeline: dict[str, list[tuple[int, dict, dict]]] = {}
+        for record in records:
+            if record.entry.get("kind") == "key.rotated":
+                entry = record.entry
+                rotation_timeline.setdefault(entry["agent"], []).append(
+                    (record.index, entry["old_public_jwk"], entry["new_public_jwk"])
+                )
+
+        def key_for(who: str, index: int) -> dict | None:
+            events = rotation_timeline.get(who, [])
+            if not events:
+                return agents.get(who, {}).get("public_key")
+            key = events[0][1]  # original key: the first rotation's old key
+            for event_index, _old, new_key in events:
+                if event_index < index:
+                    key = new_key
+            return key
+
         def _check_sig(index: int, who: str, message: bytes, signature: str) -> bool:
-            identity = agents.get(who)
-            if identity is None:
+            if who not in agents:
                 problems.append({"index": index, "issue": "unknown_agent", "detail": who})
                 return False
+            jwk = key_for(who, index)
+            if not jwk:
+                problems.append({"index": index, "issue": "unknown_attester", "detail": who})
+                return False
             try:
-                verify(message, signature, identity["public_key"])
+                verify(message, signature, jwk)
                 return True
             except (BadSignatureError, ValueError) as exc:
                 problems.append(
@@ -573,7 +683,7 @@ class Registry:
                         {"index": record.index, "issue": "unknown_agent", "detail": att.agent}
                     )
                     continue
-                jwk = agents.get(att.attester, {}).get("public_key")
+                jwk = key_for(att.attester, record.index)
                 if not jwk:
                     problems.append(
                         {"index": record.index, "issue": "unknown_attester", "detail": att.attester}
@@ -602,6 +712,22 @@ class Registry:
                 for who, signature in zip(entry.get("resolved_by", []), entry.get("signatures", [])):
                     if _check_sig(record.index, who, canonical(core), signature):
                         valid += 1
+            elif kind == "key.rotated":
+                core = {k: v for k, v in entry.items() if k != "signatures"}
+                if entry.get("agent") not in agents:
+                    problems.append(
+                        {"index": record.index, "issue": "unknown_agent", "detail": entry.get("agent")}
+                    )
+                    continue
+                # self-contained: verified against the old public key the
+                # record itself carries, so it stays provable post-rotation
+                try:
+                    verify(canonical(core), entry["signatures"][0], entry["old_public_jwk"])
+                    valid += 1
+                except (BadSignatureError, ValueError, KeyError) as exc:
+                    problems.append(
+                        {"index": record.index, "issue": "bad_signature", "detail": str(exc)}
+                    )
             else:
                 problems.append(
                     {"index": record.index, "issue": "unknown_kind", "detail": kind}

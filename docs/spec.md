@@ -42,10 +42,18 @@ Rules:
 - The **owner** is accountable for the agent's actions. An agent with no
   resolvable owner is unscoreable (band E, flag `no_owner`).
 - **Revocation** is one-way and self-service: possession of the identity's
-  private key is the authority to revoke it (`Registry.revoke`, CLI
+  current private key is the authority to revoke it (`Registry.revoke`, CLI
   `agentcred revoke --key`). A revoked identity keeps its history but is
   excluded from new attestations **in both directions** — as subject and as
   attester. The registry records `revoked_at` and bumps `version`.
+- **Key rotation (v0.5)** replaces an identity's key without changing its
+  DID — the DID names the identity, not the key. The rotation is a
+  `key.rotated` chain record signed by the **old** key and carrying both
+  the old and new public JWKs, so the record stays verifiable long after
+  the registry has forgotten the old key. Verification walks a **key
+  timeline**: every historical record is checked against the key that was
+  valid at its chain position. A key already owned by another identity
+  cannot be rotated onto, and one key can never register two identities.
 - JSON Schema: `schema/agent-identity.schema.json`.
 
 ## 3. Attestations
@@ -246,6 +254,7 @@ registered public keys and commits to the §8 log.
 | `GET /disputes/{id}` | dispute view | 404 unknown |
 | `GET /disputes/{id}/evidence` | portable evidence bundle | 404 unknown |
 | `POST /agents/{did}/revoke` | revoke; body is a signature over `canonical({"action": "revoke", "agent": did})` | 400 bad signature, 404 unknown, 409 already revoked |
+| `POST /agents/{did}/rotate` | rotate the identity's key; body carries `old_public_jwk`, `new_public_jwk`, `rotated_at`, and a signature by the current key over the canonical record | 400 bad signature/mismatch, 404 unknown, 409 revoked/key-in-use |
 | `GET /verify` | chain + signature audit report | — |
 | `GET /health` | liveness + version | — |
 
@@ -273,7 +282,7 @@ measures are the open v0.3 roadmap item.
 
 The court system. The chain (§8) gains record kinds: `attestation` (the
 default, including all pre-v0.4 records), `dispute.opened`,
-`dispute.resolved`.
+`dispute.resolved`, and `key.rotated` (§2).
 
 ### Opening
 

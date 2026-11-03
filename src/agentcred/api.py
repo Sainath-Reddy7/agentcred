@@ -74,6 +74,7 @@ def create_app(state_dir: str | None = None) -> FastAPI:
                 "GET /disputes/{id} — dispute view",
                 "GET /disputes/{id}/evidence — portable evidence bundle",
                 "POST /agents/{did}/revoke — revoke (signature over revocation intent)",
+                "POST /agents/{did}/rotate — rotate the identity's key (old key signs)",
                 "GET /verify — log chain + signature report",
                 "GET /health",
             ],
@@ -252,6 +253,35 @@ def create_app(state_dir: str | None = None) -> FastAPI:
             return reg().evidence_bundle(dispute_id)
         except ValueError as exc:
             raise HTTPException(404, str(exc)) from exc
+
+    @app.post("/agents/{did}/rotate")
+    def rotate(did: str, body: dict) -> dict:
+        """Key rotation: the body's signature must come from the CURRENT
+        registered key, over the canonical record (spec §2)."""
+        signature = body.get("signature")
+        core = {
+            "kind": "key.rotated",
+            "agent": did,
+            "old_public_jwk": body.get("old_public_jwk"),
+            "new_public_jwk": body.get("new_public_jwk"),
+            "rotated_at": body.get("rotated_at"),
+        }
+        if not signature:
+            raise HTTPException(400, "rotation must carry a signature from the current key")
+        try:
+            entry = reg().commit_rotation_record(core, [signature])
+        except BadSignatureError as exc:
+            raise HTTPException(400, f"rotation signature does not verify: {exc}") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if "unknown" in message and "old_public_jwk" not in message:
+                code = 404
+            elif "revoked" in message or "already" in message:
+                code = 409
+            else:
+                code = 400
+            raise HTTPException(code, message) from exc
+        return entry
 
     @app.get("/verify")
     def verify_registry() -> dict:
