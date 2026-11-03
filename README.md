@@ -67,7 +67,7 @@ attestations, and derived trust scores.**
 │   ├── evidence.py               # Offline evidence-bundle verifier
 │   ├── api.py                    # HTTP registry API (FastAPI)
 │   └── cli.py                    # The `agentcred` command
-└── tests/                        # Test suite (72 tests)
+└── tests/                        # Test suite (79 tests)
 ```
 
 ## Quickstart
@@ -97,6 +97,28 @@ agentcred revoke --key seller.json
 agentcred keygen --out seller-v2.json
 agentcred rotate --key seller.json --new-key seller-v2.json
 ```
+
+## Deals — attestation-gated settlement (v0.6)
+
+Rail-agnostic escrow: a mutual deal whose release condition is a signed,
+deal-bound attestation on-chain. Any payment rail can bind to it later.
+
+```bash
+agentcred deal-open --key buyer.json --payee-key seller.json \
+    --payee did:agentcred:xxx --amount 250 --condition task_completed \
+    --terms "process the invoices" --deadline 2026-12-01T00:00:00Z
+
+# the payer attests delivery, bound to the deal — then releases
+ATT=$(agentcred attest --key buyer.json --agent did:agentcred:xxx \
+    --type task_completed --payload '{"deal": "deal_yyy", "value_usd": 250}' | head -1 | sed 's/recorded \(att_[a-z0-9]*\):.*/\1/')
+agentcred deal-settle --key buyer.json --deal deal_yyy --settlement "$ATT"
+
+agentcred deals --agent did:agentcred:xxx
+```
+
+Settlement is refused unless the cited attestation exists, is about the
+payee, of the agreed type, signed by payer or arbiter, and bound via
+`payload.deal` — generic praise settles nothing (spec §11).
 
 ## Disputes & evidence (v0.4)
 

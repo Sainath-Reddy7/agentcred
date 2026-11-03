@@ -352,3 +352,61 @@ must not be free. Three clock-free rules, enforced at commit:
 
 No escrow/settlement integration (x402/AP2 rails are a separate roadmap
 item); limits are per-registry, not cross-registry.
+
+## 11. Deals & settlement (v0.6)
+
+The commerce layer: rail-agnostic escrow semantics. A deal is a
+mutually-signed agreement; settlement commits only when its condition is
+*proven on-chain* by a signed attestation. Any payment rail (x402, AP2,
+cards, banks) can bind funds to these records later — the registry holds
+proof, not money.
+
+### Opening
+
+`deal.opened` — signed by BOTH payer and payee over the canonical core:
+
+```
+{kind, id (deal_*), payer, payee, amount_usd, terms, condition_type,
+ deadline (ISO-8601 or null), arbiter (did or null), opened_at}
+```
+
+- `condition_type` ∈ {task_completed, payment_settled, capability_verified}.
+- `deadline` must be after `opened_at`. The registry runs no timers —
+  expiry is derived at read time (`status: expired`).
+- `arbiter`, if set, must be registered, unrevoked, and not a party.
+
+### Settlement — attestation-gated release
+
+`deal.settled` — signed by the payer (or, past the deadline, only the
+arbiter). It cites a `settlement` attestation id, and the registry refuses
+to commit unless that attestation:
+
+- exists on the chain, and was signed after the deal opened;
+- is about the **payee**, of the agreed **condition_type**;
+- is signed by the **payer or the arbiter**;
+- is **bound to the deal** via `payload.deal == deal_id`.
+
+A favorable attestation about anything else — another agent, another deal,
+the wrong type, or self-attested — settles nothing. The binding via
+`payload.deal` is what turns a generic praise into escrow evidence.
+
+### Cancellation
+
+`deal.cancelled` — mutual (payer + payee), no fault assigned. The refund
+path; contested failures belong in the dispute system (§10), where fault
+is assigned.
+
+### Interaction with the rest of the protocol
+
+Scoring is deliberately unchanged: the condition attestation already
+scores as a normal interaction. Deals add provable settlement terms, not
+bonus points. Deal records verify on the chain like every other record
+(opened: two party signatures; settled: signer + settlement-reference
+structural check; cancelled: two party signatures).
+
+### Honest limits
+
+The registry proves conditions were met; it does not move money, and a
+settled deal says nothing about which rail transferred funds — rail
+binding (x402/AP2) is future work. Deal-opening is not rate-limited (a
+deal needs the counterparty's signature, so spam requires cooperation).

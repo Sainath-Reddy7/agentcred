@@ -54,6 +54,43 @@ def cmd_disputes(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_deal_open(args: argparse.Namespace) -> int:
+    entry = Registry(args.state).open_deal(
+        payee=args.payee,
+        amount_usd=args.amount,
+        condition_type=args.condition,
+        payer_key_file=args.key,
+        payee_key_file=args.payee_key,
+        terms=args.terms,
+        deadline=args.deadline,
+    )
+    print(f"opened {entry['id']}: {entry['amount_usd']} USD, payer → payee on {entry['condition_type']}")
+    return 0
+
+
+def cmd_deal_settle(args: argparse.Namespace) -> int:
+    entry = Registry(args.state).settle_deal(
+        deal=args.deal, settlement=args.settlement, key_file=args.key
+    )
+    print(f"settled {entry['deal']} against {entry['settlement']}")
+    return 0
+
+
+def cmd_deal_cancel(args: argparse.Namespace) -> int:
+    entry = Registry(args.state).cancel_deal(
+        deal=args.deal, payer_key_file=args.key, payee_key_file=args.payee_key,
+        reason=args.reason,
+    )
+    print(f"cancelled {entry['deal']} (mutual — no fault assigned)")
+    return 0
+
+
+def cmd_deals(args: argparse.Namespace) -> int:
+    for view in Registry(args.state).deals_for(args.agent):
+        print(f"{view['id']}  {view['status']:<9} {view['amount_usd']:>10} USD  {view['payer']} → {view['payee']}")
+    return 0
+
+
 def cmd_keygen(args: argparse.Namespace) -> int:
     jwk = generate_keypair()
     write_key(jwk, args.out)
@@ -253,6 +290,33 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("disputes", help="list disputes (optionally one agent's)")
     p.add_argument("--agent", default=None)
     p.set_defaults(func=cmd_disputes)
+
+    p = sub.add_parser("deal-open", help="open a mutually-signed deal")
+    p.add_argument("--key", required=True, help="payer's private JWK file")
+    p.add_argument("--payee-key", required=True, help="payee's private JWK file")
+    p.add_argument("--payee", required=True, help="payee DID")
+    p.add_argument("--amount", required=True, type=float, help="amount in USD")
+    p.add_argument("--condition", required=True, choices=["task_completed", "payment_settled", "capability_verified"])
+    p.add_argument("--terms", default="", help="human-readable terms")
+    p.add_argument("--deadline", default=None, help="ISO-8601 deadline")
+    p.set_defaults(func=cmd_deal_open)
+
+    p = sub.add_parser("deal-settle", help="settle a deal against its condition attestation")
+    p.add_argument("--key", required=True, help="payer's (or arbiter's) private JWK file")
+    p.add_argument("--deal", required=True)
+    p.add_argument("--settlement", required=True, help="id of the condition attestation")
+    p.set_defaults(func=cmd_deal_settle)
+
+    p = sub.add_parser("deal-cancel", help="mutually cancel a deal (refund path)")
+    p.add_argument("--key", required=True, help="payer's private JWK file")
+    p.add_argument("--payee-key", required=True, help="payee's private JWK file")
+    p.add_argument("--deal", required=True)
+    p.add_argument("--reason", default="")
+    p.set_defaults(func=cmd_deal_cancel)
+
+    p = sub.add_parser("deals", help="list deals (optionally one agent's)")
+    p.add_argument("--agent", default=None)
+    p.set_defaults(func=cmd_deals)
 
     return parser
 
