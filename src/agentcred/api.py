@@ -73,6 +73,10 @@ def create_app(state_dir: str | None = None) -> FastAPI:
                 "POST /disputes/{id}/resolve — resolve (mutual or arbiter signatures)",
                 "GET /disputes/{id} — dispute view",
                 "GET /disputes/{id}/evidence — portable evidence bundle",
+                "GET /deals — list deals (optional ?agent=did)",
+                "POST /deals — open a mutually-signed deal",
+                "POST /deals/{id}/settle — settle against a condition attestation",
+                "POST /deals/{id}/cancel — mutual cancellation",
                 "POST /agents/{did}/revoke — revoke (signature over revocation intent)",
                 "POST /agents/{did}/rotate — rotate the identity's key (old key signs)",
                 "GET /verify — log chain + signature report",
@@ -282,6 +286,104 @@ def create_app(state_dir: str | None = None) -> FastAPI:
                 code = 400
             raise HTTPException(code, message) from exc
         return entry
+
+    @app.get("/deals")
+    def list_deals(agent: str | None = None) -> dict:
+        return {"deals": reg().deals_for(agent)}
+
+    @app.get("/deals/{deal_id}")
+    def deal_view(deal_id: str) -> dict:
+        try:
+            return reg().deal_view(deal_id)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.post("/deals", status_code=201)
+    def open_deal(body: dict) -> dict:
+        """Mutually-signed deal: body carries the deal.opened core plus
+        `signatures` [payer, payee] paired with payer/payee (spec §11)."""
+        signatures = body.get("signatures", [])
+        core = {
+            "kind": "deal.opened",
+            "id": body.get("id"),
+            "payer": body.get("payer"),
+            "payee": body.get("payee"),
+            "amount_usd": body.get("amount_usd"),
+            "terms": body.get("terms", ""),
+            "condition_type": body.get("condition_type"),
+            "deadline": body.get("deadline"),
+            "arbiter": body.get("arbiter"),
+            "opened_at": body.get("opened_at"),
+        }
+        if not signatures:
+            raise HTTPException(400, "deal.opened must carry payer and payee signatures")
+        try:
+            entry = reg().commit_deal_open(core, signatures)
+        except BadSignatureError as exc:
+            raise HTTPException(400, f"deal signature does not verify: {exc}") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if "unknown" in message:
+                code = 404
+            elif "revoked" in message or "already" in message:
+                code = 409
+            else:
+                code = 400
+            raise HTTPException(code, message) from exc
+        return {"opened": core["id"], "record": entry}
+
+    @app.post("/deals/{deal_id}/settle", status_code=201)
+    def settle_deal(deal_id: str, body: dict) -> dict:
+        core = {
+            "kind": "deal.settled",
+            "deal": deal_id,
+            "settlement": body.get("settlement"),
+            "settled_by": body.get("settled_by"),
+            "settled_at": body.get("settled_at"),
+        }
+        signature = body.get("signature")
+        if not signature:
+            raise HTTPException(400, "settlement must carry a signature (payer or arbiter)")
+        try:
+            entry = reg().commit_deal_settle(core, [signature])
+        except BadSignatureError as exc:
+            raise HTTPException(400, f"settlement signature does not verify: {exc}") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if "not found" in message or "unknown" in message:
+                code = 404
+            elif "already" in message or "cancelled" in message:
+                code = 409
+            else:
+                code = 400
+            raise HTTPException(code, message) from exc
+        return {"settled": deal_id, "record": entry}
+
+    @app.post("/deals/{deal_id}/cancel", status_code=201)
+    def cancel_deal(deal_id: str, body: dict) -> dict:
+        core = {
+            "kind": "deal.cancelled",
+            "deal": deal_id,
+            "reason": body.get("reason", ""),
+            "cancelled_at": body.get("cancelled_at"),
+        }
+        signatures = body.get("signatures", [])
+        if len(signatures) != 2:
+            raise HTTPException(400, "cancellation must carry payer and payee signatures")
+        try:
+            entry = reg().commit_deal_cancel(core, signatures)
+        except BadSignatureError as exc:
+            raise HTTPException(400, f"cancellation signature does not verify: {exc}") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if "unknown" in message:
+                code = 404
+            elif "already" in message or "settled" in message:
+                code = 409
+            else:
+                code = 400
+            raise HTTPException(code, message) from exc
+        return {"cancelled": deal_id, "record": entry}
 
     @app.get("/verify")
     def verify_registry() -> dict:

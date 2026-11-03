@@ -25,7 +25,7 @@
 - [x] False-accuser penalty for rejected disputes + `serial_false_accuser` flag
 - [ ] Attester-weighting — open problem: peer-standing alone can't split collusion rings from honest clusters without outside anchors
 - [x] Dispute rate limiting (duplicate + opener-cap + pile-on-cap, clock-free)
-- [ ] Escrow conditions on settlement rails (x402/AP2 integration)
+- [x] Deal protocol: mutual-signed deals, attestation-gated settlement, arbiter grace (v0.6, spec §11 — rail-agnostic; x402/AP2 rail binding remains future work)
 
 ## v1.0 — Protocol stabilization
 - [ ] Cross-implementation test vectors

@@ -30,6 +30,11 @@ DISPUTE_OUTCOMES = frozenset({"upheld", "rejected", "settled"})
 # against the accused — so mass-opening must not be free.
 MAX_OPEN_DISPUTES_PER_OPENER = 5
 MAX_OPEN_DISPUTES_PER_TARGET = 3
+# A deal's condition is proven by an attestation of one of these types
+# (spec §11).
+DEAL_CONDITION_TYPES = frozenset(
+    {"task_completed", "payment_settled", "capability_verified"}
+)
 
 
 def _now() -> str:
@@ -551,6 +556,293 @@ class Registry:
             if "opened" in slot
         ]
 
+    # -- deals & settlement (v0.6) ---------------------------------------
+
+    def _deal_index(self) -> dict[str, dict]:
+        """One pass over the log: {deal_id: {opened, settled, cancelled}}."""
+        index: dict[str, dict] = {}
+        for record in self._records():
+            entry = record.entry
+            kind = entry.get("kind")
+            if kind == "deal.opened":
+                index.setdefault(entry["id"], {})["opened"] = entry
+            elif kind == "deal.settled":
+                index.setdefault(entry["deal"], {})["settled"] = entry
+            elif kind == "deal.cancelled":
+                index.setdefault(entry["deal"], {})["cancelled"] = entry
+        return index
+
+    def _deal_state(self, deal_id: str) -> dict | None:
+        slot = self._deal_index().get(deal_id, {})
+        if "opened" not in slot:
+            return None
+        return {
+            "opened": slot["opened"],
+            "settled": slot.get("settled"),
+            "cancelled": slot.get("cancelled"),
+        }
+
+    def open_deal(
+        self,
+        payee: str,
+        amount_usd: float,
+        condition_type: str,
+        payer_key_file: str | Path,
+        payee_key_file: str | Path,
+        terms: str = "",
+        deadline: str | None = None,
+        arbiter: str | None = None,
+    ) -> dict:
+        """Build, sign (both parties), and commit a deal."""
+        payer_jwk = read_key(payer_key_file)
+        payee_jwk = read_key(payee_key_file)
+        payee_did = self.did_for_key(payee_jwk)
+        if payee is not None and payee != payee_did:
+            raise ValueError(f"payee key belongs to {payee_did}, not {payee}")
+        core = {
+            "kind": "deal.opened",
+            "id": f"deal_{uuid.uuid4().hex[:12]}",
+            "payer": self.did_for_key(payer_jwk),
+            "payee": payee_did,
+            "amount_usd": amount_usd,
+            "terms": terms,
+            "condition_type": condition_type,
+            "deadline": deadline,
+            "arbiter": arbiter,
+            "opened_at": _now(),
+        }
+        signatures = [
+            sign(canonical(core), payer_jwk),
+            sign(canonical(core), payee_jwk),
+        ]
+        return self.commit_deal_open(core, signatures)
+
+    def commit_deal_open(self, core: dict, signatures: list[str]) -> dict:
+        """Verify and append a mutually-signed deal (API path)."""
+        agents = self._load_agents()
+        if core.get("kind") != "deal.opened":
+            raise ValueError("expected a deal.opened record")
+        for field in ("id", "payer", "payee", "amount_usd", "condition_type", "opened_at"):
+            if field not in core:
+                raise ValueError(f"deal.opened missing field {field}")
+        if not core["id"].startswith("deal_"):
+            raise ValueError("deal ids must start with deal_")
+        if core["payer"] == core["payee"]:
+            raise ValueError("payer and payee must differ")
+        for role in ("payer", "payee"):
+            identity = agents.get(core[role])
+            if identity is None:
+                raise ValueError(f"unknown {role} {core[role]}")
+            if identity["revoked"]:
+                raise ValueError(f"{role} {core[role]} is revoked")
+        if not isinstance(core["amount_usd"], (int, float)) or core["amount_usd"] < 0:
+            raise ValueError("amount_usd must be a non-negative number")
+        if core["condition_type"] not in DEAL_CONDITION_TYPES:
+            raise ValueError(f"condition_type must be one of {sorted(DEAL_CONDITION_TYPES)}")
+        if not _valid_ts(core["opened_at"]):
+            raise ValueError("opened_at must be ISO-8601 UTC, within clock-skew tolerance of now")
+        if core.get("deadline") is not None:
+            try:
+                deadline_dt = datetime.fromisoformat(str(core["deadline"]).replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ValueError("deadline must be ISO-8601") from exc
+            if deadline_dt <= datetime.fromisoformat(core["opened_at"].replace("Z", "+00:00")):
+                raise ValueError("deadline must be after opened_at")
+        if core.get("arbiter"):
+            arb = agents.get(core["arbiter"])
+            if arb is None:
+                raise ValueError(f"unknown arbiter {core['arbiter']}")
+            if arb["revoked"]:
+                raise ValueError(f"arbiter {core['arbiter']} is revoked")
+            if core["arbiter"] in (core["payer"], core["payee"]):
+                raise ValueError("the arbiter cannot be a party to the deal")
+        if self._deal_state(core["id"]) is not None:
+            raise ValueError(f"deal {core['id']} already exists")
+        if len(signatures) != 2:
+            raise ValueError("deal.opened carries exactly two signatures (payer, payee)")
+        for who, signature in zip((core["payer"], core["payee"]), signatures):
+            try:
+                verify(canonical(core), signature, agents[who]["public_key"])
+            except BadSignatureError as exc:
+                raise ValueError(f"signature for {who} does not verify: {exc}") from exc
+        entry = core | {"signatures": list(signatures)}
+        append(self.log_path, entry)
+        return entry
+
+    def settle_deal(self, deal: str, settlement: str, key_file: str | Path) -> dict:
+        """Build, sign, and commit a settlement citing a condition attestation."""
+        jwk = read_key(key_file)
+        settled_by = self.did_for_key(jwk)
+        core = {
+            "kind": "deal.settled",
+            "deal": deal,
+            "settlement": settlement,
+            "settled_by": settled_by,
+            "settled_at": _now(),
+        }
+        signature = sign(canonical(core), jwk)
+        return self.commit_deal_settle(core, [signature])
+
+    def commit_deal_settle(self, core: dict, signatures: list[str]) -> dict:
+        """Verify and append a settlement (API path).
+
+        Escrow semantics, rail-agnostically: settlement only commits when a
+        real, signed condition attestation exists on the chain, bound to
+        this deal via payload.deal, of the agreed type, about the payee,
+        signed by the payer (or the deal's arbiter) after the deal opened
+        and (for payer settlement) before the deadline.
+        """
+        agents = self._load_agents()
+        if core.get("kind") != "deal.settled":
+            raise ValueError("expected a deal.settled record")
+        for field in ("deal", "settlement", "settled_by", "settled_at"):
+            if field not in core:
+                raise ValueError(f"deal.settled missing field {field}")
+        if not _valid_ts(core["settled_at"]):
+            raise ValueError("settled_at must be ISO-8601 UTC, within clock-skew tolerance of now")
+        state = self._deal_state(core["deal"])
+        if state is None:
+            raise ValueError(f"unknown deal {core['deal']}")
+        if state["settled"] is not None:
+            raise ValueError(f"deal {core['deal']} is already settled")
+        if state["cancelled"] is not None:
+            raise ValueError(f"deal {core['deal']} is cancelled")
+        deal = state["opened"]
+        allowed_signers = {deal["payer"]}
+        if deal.get("arbiter"):
+            allowed_signers.add(deal["arbiter"])
+        if core["settled_by"] not in allowed_signers:
+            raise ValueError("settlement must be signed by the payer or the deal arbiter")
+        signer = agents.get(core["settled_by"])
+        if signer is None:
+            raise ValueError(f"unknown agent {core['settled_by']}")
+        if signer["revoked"]:
+            raise ValueError(f"settler {core['settled_by']} is revoked")
+
+        att = self._find_attestation_entry(core["settlement"])
+        if att is None:
+            raise ValueError(f"settlement attestation {core['settlement']} not found on chain")
+        if att.get("agent") != deal["payee"]:
+            raise ValueError("condition attestation is not about the payee")
+        if att.get("type") != deal["condition_type"]:
+            raise ValueError(
+                f"condition attestation type {att.get('type')!r} != agreed {deal['condition_type']!r}"
+            )
+        if att.get("attester") not in allowed_signers:
+            raise ValueError("condition attestation must be signed by the payer or the arbiter")
+        if att.get("payload", {}).get("deal") != core["deal"]:
+            raise ValueError("condition attestation is not bound to this deal (payload.deal)")
+        att_signed = datetime.fromisoformat(att["signed_at"].replace("Z", "+00:00"))
+        opened_at = datetime.fromisoformat(deal["opened_at"].replace("Z", "+00:00"))
+        if att_signed < opened_at:
+            raise ValueError("condition attestation predates the deal")
+        settled_at = datetime.fromisoformat(core["settled_at"].replace("Z", "+00:00"))
+        if deal.get("deadline"):
+            deadline_dt = datetime.fromisoformat(str(deal["deadline"]).replace("Z", "+00:00"))
+            if settled_at > deadline_dt and core["settled_by"] != deal.get("arbiter"):
+                raise ValueError("deadline passed: only the arbiter may settle now")
+
+        if len(signatures) != 1:
+            raise ValueError("deal.settled carries exactly one signature")
+        try:
+            verify(canonical(core), signatures[0], signer["public_key"])
+        except BadSignatureError as exc:
+            raise ValueError(f"settlement signature does not verify: {exc}") from exc
+        entry = core | {"signatures": list(signatures)}
+        append(self.log_path, entry)
+        return entry
+
+    def cancel_deal(
+        self, deal: str, payer_key_file: str | Path, payee_key_file: str | Path, reason: str = ""
+    ) -> dict:
+        """Mutual cancellation (the refund path) — no fault assigned."""
+        state = self._deal_state(deal)
+        if state is None:
+            raise ValueError(f"unknown deal {deal}")
+        payer_jwk = read_key(payer_key_file)
+        core = {
+            "kind": "deal.cancelled",
+            "deal": deal,
+            "reason": reason,
+            "cancelled_at": _now(),
+        }
+        signatures = [
+            sign(canonical(core), payer_jwk),
+            sign(canonical(core), read_key(payee_key_file)),
+        ]
+        return self.commit_deal_cancel(core, signatures)
+
+    def commit_deal_cancel(self, core: dict, signatures: list[str]) -> dict:
+        agents = self._load_agents()
+        if core.get("kind") != "deal.cancelled":
+            raise ValueError("expected a deal.cancelled record")
+        for field in ("deal", "cancelled_at"):
+            if field not in core:
+                raise ValueError(f"deal.cancelled missing field {field}")
+        if not _valid_ts(core["cancelled_at"]):
+            raise ValueError("cancelled_at must be ISO-8601 UTC, within clock-skew tolerance of now")
+        state = self._deal_state(core["deal"])
+        if state is None:
+            raise ValueError(f"unknown deal {core['deal']}")
+        if state["settled"] is not None:
+            raise ValueError(f"deal {core['deal']} is already settled")
+        if state["cancelled"] is not None:
+            raise ValueError(f"deal {core['deal']} is already cancelled")
+        deal = state["opened"]
+        if len(signatures) != 2:
+            raise ValueError("deal.cancelled carries exactly two signatures (payer, payee)")
+        for who, signature in zip((deal["payer"], deal["payee"]), signatures):
+            identity = agents.get(who)
+            if identity is None:
+                raise ValueError(f"unknown agent {who}")
+            if identity["revoked"]:
+                raise ValueError(f"{who} is revoked")
+            try:
+                verify(canonical(core), signature, identity["public_key"])
+            except BadSignatureError as exc:
+                raise ValueError(f"signature for {who} does not verify: {exc}") from exc
+        entry = core | {"signatures": list(signatures)}
+        append(self.log_path, entry)
+        return entry
+
+    def _deal_view_from_slot(self, slot: dict) -> dict:
+        opened = slot["opened"]
+        view = {
+            k: opened[k] for k in
+            ("id", "payer", "payee", "amount_usd", "terms", "condition_type", "opened_at")
+        }
+        view["deadline"] = opened.get("deadline")
+        view["arbiter"] = opened.get("arbiter")
+        if slot.get("settled") is not None:
+            view["status"] = "settled"
+            view["settlement"] = slot["settled"]["settlement"]
+            view["settled_at"] = slot["settled"]["settled_at"]
+        elif slot.get("cancelled") is not None:
+            view["status"] = "cancelled"
+        else:
+            view["status"] = "open"
+            if opened.get("deadline"):
+                deadline_dt = datetime.fromisoformat(str(opened["deadline"]).replace("Z", "+00:00"))
+                if deadline_dt < datetime.now(timezone.utc):
+                    view["status"] = "expired"  # registry runs no timers; expiry is derived
+        return view
+
+    def deal_view(self, deal_id: str) -> dict:
+        slot = self._deal_index().get(deal_id)
+        if not slot or "opened" not in slot:
+            raise ValueError(f"unknown deal {deal_id}")
+        return self._deal_view_from_slot(slot)
+
+    def deals_for(self, agent: str | None = None) -> list[dict]:
+        views = []
+        for slot in self._deal_index().values():
+            if "opened" not in slot:
+                continue
+            view = self._deal_view_from_slot(slot)
+            if agent is None or agent in (view["payer"], view["payee"]):
+                views.append(view)
+        return views
+
     def evidence_bundle(self, dispute_id: str) -> dict:
         """Portable, self-verifying court document for one dispute.
 
@@ -632,6 +924,7 @@ class Registry:
         agents = self._load_agents()
         valid = 0
         opened_seen: set[str] = set()
+        attestation_ids_seen: set[str] = set()
 
         # Key timeline: which public key was valid for each agent at each
         # chain position. Rotation records carry the old key precisely so
@@ -677,6 +970,7 @@ class Registry:
             entry = record.entry
             kind = entry.get("kind", "attestation")
             if kind == "attestation":
+                attestation_ids_seen.add(entry.get("id"))
                 att = Attestation.from_dict(entry)
                 if att.agent not in agents:
                     problems.append(
@@ -728,6 +1022,36 @@ class Registry:
                     problems.append(
                         {"index": record.index, "issue": "bad_signature", "detail": str(exc)}
                     )
+            elif kind == "deal.opened":
+                core = {k: v for k, v in entry.items() if k != "signatures"}
+                for who, signature in zip(
+                    (entry.get("payer"), entry.get("payee")), entry.get("signatures", [])
+                ):
+                    if _check_sig(record.index, who, canonical(core), signature):
+                        valid += 1
+            elif kind == "deal.settled":
+                core = {k: v for k, v in entry.items() if k != "signatures"}
+                if entry.get("settlement") not in attestation_ids_seen:
+                    problems.append(
+                        {"index": record.index, "issue": "settlement_missing",
+                         "detail": entry.get("settlement")}
+                    )
+                    continue
+                if _check_sig(
+                    record.index, entry.get("settled_by"), canonical(core),
+                    (entry.get("signatures") or [None])[0],
+                ):
+                    valid += 1
+            elif kind == "deal.cancelled":
+                core = {k: v for k, v in entry.items() if k != "signatures"}
+                state = self._deal_index().get(entry.get("deal"), {})
+                parties = (
+                    state.get("opened", {}).get("payer"),
+                    state.get("opened", {}).get("payee"),
+                )
+                for who, signature in zip(parties, entry.get("signatures", [])):
+                    if _check_sig(record.index, who, canonical(core), signature):
+                        valid += 1
             else:
                 problems.append(
                     {"index": record.index, "issue": "unknown_kind", "detail": kind}
