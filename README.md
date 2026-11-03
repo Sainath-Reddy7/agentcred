@@ -67,7 +67,7 @@ attestations, and derived trust scores.**
 │   ├── evidence.py               # Offline evidence-bundle verifier
 │   ├── api.py                    # HTTP registry API (FastAPI)
 │   └── cli.py                    # The `agentcred` command
-└── tests/                        # Test suite (64 tests)
+└── tests/                        # Test suite (72 tests)
 ```
 
 ## Quickstart
@@ -92,6 +92,10 @@ agentcred log                               # append-only history
 
 # self-service, one-way: history is kept, new attestations stop
 agentcred revoke --key seller.json
+
+# compromise recovery without losing the identity: DID stays, key changes
+agentcred keygen --out seller-v2.json
+agentcred rotate --key seller.json --new-key seller-v2.json
 ```
 
 ## Disputes & evidence (v0.4)

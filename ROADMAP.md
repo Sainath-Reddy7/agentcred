@@ -14,7 +14,7 @@
 ## v0.3 — Registry API
 - [x] REST API for register/attest/query/revoke/verify (`agentcred serve`, spec §9 — keys never leave clients)
 - [x] Identity revocation flow (self-service via key possession, enforced in both directions)
-- [ ] Owner key rotation
+- [x] Owner key rotation (v0.5: DID pinned, old key authorizes, key-timeline verification)
 - [ ] Client tooling for remote registries (CLI `--url` mode)
 - [ ] Sybil-resistance notes: rate-limited attestations, attester reputation bootstrapping
 

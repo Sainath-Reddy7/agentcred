@@ -80,6 +80,47 @@ def test_state_dir_resolves_from_env():
                 os.environ["AGENTCRED_STATE"] = old
 
 
+def test_rotation_via_api():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        seller_jwk, seller_did = register(client, "seller")
+        _, buyer_did = register(client, "buyer")
+
+        current = client.get(f"/agents/{seller_did}").json()["identity"]["public_key"]
+        new_jwk = generate_keypair()
+        new_public = {k: new_jwk[k] for k in ("kty", "crv", "x")}
+        core = {
+            "kind": "key.rotated",
+            "agent": seller_did,
+            "old_public_jwk": current,
+            "new_public_jwk": new_public,
+            "rotated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        forged = dict(core, new_public_jwk=current)  # wrong signer content
+        wrong = client.post(
+            f"/agents/{seller_did}/rotate",
+            json=forged | {"signature": sign(canonical(forged), new_jwk)},
+        )
+        assert wrong.status_code == 400
+
+        response = client.post(
+            f"/agents/{seller_did}/rotate",
+            json=core | {"signature": sign(canonical(core), seller_jwk)},
+        )
+        assert response.status_code == 200, response.text
+
+        # attest with the NEW key under the SAME did
+        att = signed_attestation(new_jwk, buyer_did, "task_completed")
+        att["attester"] = seller_did
+        unsigned = {k: att[k] for k in ("id", "agent", "attester", "type", "signed_at", "payload")}
+        att = unsigned | {"signature": sign(canonical(unsigned), new_jwk)}
+        posted = client.post("/attestations", json=att)
+        assert posted.status_code == 201, posted.text
+
+        report = client.get("/verify").json()
+        assert report["ok"] and report["signatures_valid"] == 2  # rotation + attestation
+
+
 def test_listing_endpoints():
     with tempfile.TemporaryDirectory() as tmp:
         client = make_client(tmp)

@@ -24,6 +24,20 @@ from .models import ATTESTATION_TYPES
 from .registry import Registry
 
 
+def cmd_rotate(args: argparse.Namespace) -> int:
+    registry = Registry(args.state)
+    did = registry.did_for_key(read_key(args.key))
+    if did is None:
+        print("error: key does not belong to any registered identity", file=sys.stderr)
+        return 2
+    identity = registry.rotate(did, key_file=args.key, new_key_file=args.new_key)
+    print(
+        f"rotated {identity['did']} → new key active "
+        f"(version {identity['version']}); DID unchanged"
+    )
+    return 0
+
+
 def cmd_agents(args: argparse.Namespace) -> int:
     for identity in Registry(args.state).agents():
         flag = "  [revoked]" if identity["revoked"] else ""
@@ -193,6 +207,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("revoke", help="revoke the identity a key owns (self-service, one-way)")
     p.add_argument("--key", required=True, help="private JWK file of the identity to revoke")
     p.set_defaults(func=cmd_revoke)
+
+    p = sub.add_parser("rotate", help="rotate an identity's key (old key authorizes)")
+    p.add_argument("--key", required=True, help="current private JWK file")
+    p.add_argument("--new-key", required=True, help="new private JWK file (agentcred keygen)")
+    p.set_defaults(func=cmd_rotate)
 
     p = sub.add_parser("serve", help="run the registry HTTP API (requires the api extra)")
     p.add_argument("--host", default="127.0.0.1")
