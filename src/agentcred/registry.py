@@ -159,7 +159,8 @@ class Registry:
 
         Enforces: attester registered and not revoked, subject registered
         and not revoked, signature valid under the attester's registered
-        public key. This is the trust boundary for submitted attestations
+        public key, and attestation-id uniqueness (replay protection).
+        This is the trust boundary for submitted attestations
         (API path); the local CLI path funnels through it too.
         """
         agents = self._load_agents()
@@ -173,6 +174,13 @@ class Registry:
             raise ValueError(f"attester {attestation.attester} is revoked")
         if agents[attestation.agent]["revoked"]:
             raise ValueError(f"agent {attestation.agent} is revoked")
+        existing_ids = {
+            record.entry.get("id")
+            for record in self._records()
+            if record.entry.get("kind", "attestation") == "attestation"
+        }
+        if attestation.id in existing_ids:
+            raise ValueError(f"attestation {attestation.id} is already recorded (replay)")
         verify_attestation(
             attestation, agents[attestation.attester]["public_key"]
         )

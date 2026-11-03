@@ -149,7 +149,7 @@ def create_app(state_dir: str | None = None) -> FastAPI:
             message = str(exc)
             if "unknown agent" in message or "not registered" in message:
                 code = 404
-            elif "revoked" in message:
+            elif "revoked" in message or "already recorded" in message:
                 code = 409
             else:
                 code = 400

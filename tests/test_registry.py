@@ -130,6 +130,19 @@ def test_attestation_ids_unique_same_second():
         assert first.id != second.id
 
 
+def test_attestation_replay_rejected():
+    with tempfile.TemporaryDirectory() as tmp:
+        registry, _, buyer_key, seller_did, _ = setup_world(tmp)
+        att = registry.attest(seller_did, "task_completed", key_file=buyer_key)
+        try:
+            registry.record(att)  # resubmit the identical signed attestation
+            raise AssertionError("replayed attestation accepted")
+        except ValueError:
+            pass
+        assert len(registry.attestations_for(seller_did)) == 1
+        assert registry.query(seller_did)["metrics"]["interactions"] == 1
+
+
 def test_revoked_agent_rejected_as_subject_and_attester():
     with tempfile.TemporaryDirectory() as tmp:
         registry, seller_key, buyer_key, seller_did, buyer_did = setup_world(tmp)
