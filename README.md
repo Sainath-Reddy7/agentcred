@@ -26,19 +26,26 @@ attestations, and derived trust scores.**
 
 ## How it works
 
-```
-┌──────────────┐    register     ┌──────────────┐
-│  AI Agent    │ ──────────────▶ │   Registry   │  did:agentcred:<id>
-│  (owned by   │                 │  (identity)  │  owner, capabilities, public key
-│   human/org) │ ◀────────────── │              │
-└──────────────┘                 └──────────────┘
-       │                                ▲
-       │ transacts with counterparties  │ signed attestations
-       ▼                                │
-┌──────────────┐   submit events  ┌──────────────┐   query   ┌──────────────┐
-│ Counterparty │ ───────────────▶ │ Attestation  │ ────────▶ │ Trust Score  │
-│ (agent/platform/human)          │    Log       │           │  (band A–E)  │
-└──────────────┘                  └──────────────┘           └──────────────┘
+```mermaid
+flowchart LR
+    subgraph clients["Clients — keys never leave"]
+        AG["AI agent<br/>(Ed25519 keypair)"]
+        CP["Counterparty<br/>agent · platform · human"]
+        VF["Verifier<br/>platform · arbiter · regulator"]
+    end
+
+    subgraph registry["Registry — local state or agentcred serve"]
+        ID["Identities<br/>public keys · capabilities · revocation"]
+        LOG["Hash-chained append-only log<br/>attestations · disputes · deals · key rotations"]
+        SCORE["Scoring engine<br/>calibrated · decayed · fault-aware"]
+    end
+
+    AG -- "register<br/>(public JWK only)" --> ID
+    CP -- "signed attestations" --> LOG
+    ID --> SCORE
+    LOG --> SCORE
+    VF -- "query · verify · evidence" --> SCORE
+    SCORE -- "trust report<br/>band A–E" --> VF
 ```
 
 1. **Register** — an agent gets a persistent identity (`did:agentcred:<id>`) binding it
@@ -50,6 +57,25 @@ attestations, and derived trust scores.**
    dispute ratio, settled volume, tenure) and maps them to a trust band **A–E**.
 4. **Query** — any platform, agent, or human can check a counterparty's score
    before delegating or transacting.
+
+### The trust lifecycle
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Agent (key holder)
+    participant R as Registry
+    participant C as Counterparty
+
+    A->>R: register (public JWK only)
+    R-->>A: identity + did:agentcred:…
+
+    C->>R: attest(agent, type, payload) — signed locally
+    R->>R: verify signature · replay guard · append to chain
+
+    A->>R: query(agent)
+    R-->>A: score · band · metrics · flags
+```
 
 ## Repository structure
 
@@ -103,6 +129,17 @@ agentcred rotate --key seller.json --new-key seller-v2.json
 Rail-agnostic escrow: a mutual deal whose release condition is a signed,
 deal-bound attestation on-chain. Any payment rail can bind to it later.
 
+```mermaid
+stateDiagram-v2
+    [*] --> open: deal.opened (payer + payee sign)
+    open --> settled: deal.settled (condition attestation proven)
+    open --> cancelled: mutual cancellation (refund)
+    open --> expired: deadline passes (derived - no timers)
+    expired --> settled: arbiter grace
+    settled --> [*]
+    cancelled --> [*]
+```
+
 ```bash
 agentcred deal-open --key buyer.json --payee-key seller.json \
     --payee did:agentcred:xxx --amount 250 --condition task_completed \
@@ -140,6 +177,19 @@ revocation), signing locally per spec §7.
 ## Disputes & evidence (v0.4)
 
 When an attested interaction goes wrong, the court system takes over:
+
+```mermaid
+flowchart TD
+    O["dispute.opened<br/>signed by the opener<br/>targets ONE attestation<br/>rate-limited"] --> MUT["mutual resolution<br/>opener + accused both sign"]
+    O --> ARB["arbiter resolution<br/>nominated third party signs"]
+    MUT --> U["upheld — fault lands<br/>on the accused"]
+    MUT --> RJ["rejected — lifted<br/>false-accuser penalty"]
+    MUT --> ST["settled — no fault<br/>mutual walk-away"]
+    ARB --> U
+    ARB --> RJ
+    ARB --> ST
+    U & RJ & ST --> E["evidence bundle<br/>verified offline by anyone"]
+```
 
 ```bash
 agentcred dispute-open --key buyer.json --target att_xxx --reason "task never completed"
