@@ -15,7 +15,7 @@
 - [x] REST API for register/attest/query/revoke/verify (`agentcred serve`, spec §9 — keys never leave clients)
 - [x] Identity revocation flow (self-service via key possession, enforced in both directions)
 - [x] Owner key rotation (v0.5: DID pinned, old key authorizes, key-timeline verification)
-- [ ] Client tooling for remote registries (CLI `--url` mode)
+- [x] Client tooling for remote registries (v0.7: `RemoteRegistry` client + CLI `--url` mode, keys never leave the client)
 - [ ] Sybil-resistance notes: rate-limited attestations, attester reputation bootstrapping
 
 ## v0.4 — Score maturity & the court system

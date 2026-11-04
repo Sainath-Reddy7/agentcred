@@ -24,8 +24,17 @@ from .models import ATTESTATION_TYPES
 from .registry import Registry
 
 
+def _registry(args: argparse.Namespace):
+    """Local state dir by default, remote registry with --url."""
+    if getattr(args, "url", None):
+        from .client import RemoteRegistry
+
+        return RemoteRegistry(args.url)
+    return Registry(args.state)
+
+
 def cmd_rotate(args: argparse.Namespace) -> int:
-    registry = Registry(args.state)
+    registry = _registry(args)
     did = registry.did_for_key(read_key(args.key))
     if did is None:
         print("error: key does not belong to any registered identity", file=sys.stderr)
@@ -39,16 +48,14 @@ def cmd_rotate(args: argparse.Namespace) -> int:
 
 
 def cmd_agents(args: argparse.Namespace) -> int:
-    for identity in Registry(args.state).agents():
+    for identity in _registry(args).agents():
         flag = "  [revoked]" if identity["revoked"] else ""
         print(f"{identity['did']}  {identity['display_name']}{flag}")
     return 0
 
 
 def cmd_disputes(args: argparse.Namespace) -> int:
-    registry = Registry(args.state)
-    views = registry.disputes_for(args.agent) if args.agent else registry.all_disputes()
-    for view in views:
+    for view in _registry(args).disputes_for(args.agent):
         state = view["outcome"] or view["status"]
         print(f"{view['id']}  {state:<8} agent={view['agent']}  target={view['target']}")
     return 0
@@ -100,7 +107,7 @@ def cmd_keygen(args: argparse.Namespace) -> int:
 
 
 def cmd_register(args: argparse.Namespace) -> int:
-    registry = Registry(args.state)
+    registry = _registry(args)
     identity = registry.register(
         key_file=args.key, display_name=args.name, capabilities=tuple(args.caps)
     )
@@ -110,38 +117,43 @@ def cmd_register(args: argparse.Namespace) -> int:
 
 def cmd_attest(args: argparse.Namespace) -> int:
     payload = json.loads(args.payload) if args.payload else {}
-    registry = Registry(args.state)
-    att = registry.attest(
+    att = _registry(args).attest(
         agent=args.agent, type_=args.type, key_file=args.key, payload=payload
     )
-    print(f"recorded {att.id}: {att.attester} attests {att.type} → {att.agent}")
-    print(f"signature: {att.signature[:24]}…" if att.signature else "unsigned")
+    a = att if isinstance(att, dict) else att.to_dict()
+    print(f"recorded {a['id']}: {a['attester']} attests {a['type']} → {a['agent']}")
+    sig = a.get("signature")
+    print(f"signature: {sig[:24]}…" if sig else "unsigned")
     return 0
 
 
 def cmd_query(args: argparse.Namespace) -> int:
-    result = Registry(args.state).query(args.agent)
+    result = _registry(args).query(args.agent)
     print(json.dumps(result, indent=2))
     return 0
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
-    report = Registry(args.state).verify()
+    report = _registry(args).verify()
     print(json.dumps(report, indent=2))
     return 0 if report["ok"] else 1
 
 
 def cmd_log(args: argparse.Namespace) -> int:
-    registry = Registry(args.state)
-    for att in registry.attestations_for(agent=args.agent):
-        sig = att.signature[:12] + "…" if att.signature else "unsigned"
-        print(f"{att.signed_at}  {att.attester} → {att.agent}  {att.type:<20} {sig}")
+    for att in _registry(args).attestations_for(agent=args.agent):
+        d = att if isinstance(att, dict) else att.to_dict()
+        sig = (d.get("signature") or "")[:12]
+        print(f"{d['signed_at']}  {d['attester']} → {d['agent']}  {d['type']:<20} {sig}…")
     return 0
 
 
 def cmd_revoke(args: argparse.Namespace) -> int:
-    did = did_from_jwk(read_key(args.key))
-    identity = Registry(args.state).revoke(did, key_file=args.key)
+    registry = _registry(args)
+    did = registry.did_for_key(read_key(args.key))
+    if did is None:
+        print("error: key does not belong to any registered identity", file=sys.stderr)
+        return 2
+    identity = registry.revoke(did, key_file=args.key)
     print(
         f"revoked {identity['did']} (version {identity['version']}) — "
         "history is kept; new attestations in both directions are refused"
@@ -163,7 +175,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 
 def cmd_dispute_open(args: argparse.Namespace) -> int:
-    registry = Registry(args.state)
+    registry = _registry(args)
     entry = registry.open_dispute(
         target=args.target, reason=args.reason, key_file=args.key, arbiter=args.arbiter
     )
@@ -172,7 +184,7 @@ def cmd_dispute_open(args: argparse.Namespace) -> int:
 
 
 def cmd_dispute_resolve(args: argparse.Namespace) -> int:
-    registry = Registry(args.state)
+    registry = _registry(args)
     entry = registry.resolve_dispute(
         dispute=args.dispute, outcome=args.outcome, key_files=args.key
     )
@@ -186,7 +198,7 @@ def cmd_dispute_resolve(args: argparse.Namespace) -> int:
 def cmd_evidence(args: argparse.Namespace) -> int:
     import json as _json
 
-    bundle = Registry(args.state).evidence_bundle(args.dispute)
+    bundle = _registry(args).evidence_bundle(args.dispute)
     if args.out:
         Path(args.out).write_text(_json.dumps(bundle, indent=2), encoding="utf-8")
         print(f"evidence bundle written to {args.out}")
@@ -214,6 +226,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument(
         "--state", default="agentcred-state", help="registry state directory (default: ./agentcred-state)"
+    )
+    parser.add_argument(
+        "--url", default=None,
+        help="remote registry base URL — the same commands then drive it over HTTP (keys never leave this machine)",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

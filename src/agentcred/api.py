@@ -67,6 +67,7 @@ def create_app(state_dir: str | None = None) -> FastAPI:
                 "POST /agents — register an identity (public JWK)",
                 "GET /agents/{did} — identity + trust score",
                 "GET /agents/{did}/attestations — raw history",
+                "GET /attestations/{id} — one committed attestation",
                 "POST /attestations — submit a signed attestation",
                 "GET /disputes — list disputes (optional ?agent=did)",
                 "POST /disputes — open a dispute over an attestation (signed)",
@@ -237,6 +238,13 @@ def create_app(state_dir: str | None = None) -> FastAPI:
                 code = 400
             raise HTTPException(code, message) from exc
         return {"resolved": dispute_id, "outcome": core["outcome"], "record": entry}
+
+    @app.get("/attestations/{attestation_id}")
+    def attestation(attestation_id: str) -> dict:
+        entry = reg().attestation(attestation_id)
+        if entry is None:
+            raise HTTPException(404, f"unknown attestation {attestation_id}")
+        return entry
 
     @app.get("/disputes")
     def list_disputes(agent: str | None = None) -> dict:
