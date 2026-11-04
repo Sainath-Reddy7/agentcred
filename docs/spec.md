@@ -247,6 +247,7 @@ registered public keys and commits to the §8 log.
 | `POST /agents` | register from a public JWK → identity (201) | 400 malformed, 409 duplicate |
 | `GET /agents/{did}` | identity + trust score report | 404 unknown |
 | `GET /agents/{did}/attestations` | raw attestation history | 404 unknown |
+| `GET /attestations/{id}` | one committed attestation (clients resolve dispute targets with it) | 404 unknown |
 | `POST /attestations` | submit a fully-signed attestation | 400 invalid/unsigned/bad signature/future-dated, 404 unknown party, 409 revoked party |
 | `GET /disputes` | list disputes (optional `?agent=did` filter) | — |
 | `POST /disputes` | open a dispute over an attestation | 400 invalid/bad signature/rate-limited, 404 unknown party, 409 revoked |
@@ -277,6 +278,12 @@ authority the protocol recognizes (until v0.3 owner-key rotation).
 **Not provided yet** (reference deployment, not production): authentication,
 rate limiting, request signing, multi-tenant state. Sybil-resistance
 measures are the open v0.3 roadmap item.
+
+**Reference client (v0.7).** `agentcred.client.RemoteRegistry` mirrors the
+local Registry surface over this API — register, attest, query, verify,
+disputes, evidence, deals, rotation, revocation — signing locally so keys
+never leave the client process. The CLI drives it with the global
+`--url` flag: `agentcred --url https://registry.example attest …`.
 
 ## 10. Disputes & evidence bundles (v0.4)
 

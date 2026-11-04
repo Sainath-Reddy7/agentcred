@@ -67,7 +67,7 @@ attestations, and derived trust scores.**
 │   ├── evidence.py               # Offline evidence-bundle verifier
 │   ├── api.py                    # HTTP registry API (FastAPI)
 │   └── cli.py                    # The `agentcred` command
-└── tests/                        # Test suite (79 tests)
+└── tests/                        # Test suite (82 tests)
 ```
 
 ## Quickstart
@@ -119,6 +119,23 @@ agentcred deals --agent did:agentcred:xxx
 Settlement is refused unless the cited attestation exists, is about the
 payee, of the agreed type, signed by payer or arbiter, and bound via
 `payload.deal` — generic praise settles nothing (spec §11).
+
+## Remote registries (v0.7)
+
+The same CLI drives any deployed registry — add `--url`, keys never
+leave your machine:
+
+```bash
+agentcred --url https://registry.example.com register --key keys/bot.json --name invoice-bot
+agentcred --url https://registry.example.com attest --key keys/buyer.json \
+    --agent did:agentcred:xxx --type task_completed --payload '{"value_usd": 120}'
+agentcred --url https://registry.example.com query --agent did:agentcred:xxx
+agentcred --url https://registry.example.com verify
+```
+
+Or from Python: `agentcred.client.RemoteRegistry(base_url)` mirrors the
+local Registry surface (register, attest, disputes, deals, rotation,
+revocation), signing locally per spec §7.
 
 ## Disputes & evidence (v0.4)
 

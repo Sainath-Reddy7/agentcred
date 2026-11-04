@@ -331,6 +331,10 @@ class Registry:
                 return record.entry
         return None
 
+    def attestation(self, attestation_id: str) -> dict | None:
+        """Public lookup of one committed attestation by id."""
+        return self._find_attestation_entry(attestation_id)
+
     def open_dispute(
         self,
         target: str,
@@ -540,13 +544,13 @@ class Registry:
             raise ValueError(f"unknown dispute {dispute_id}")
         return self._view_from_slot(slot)
 
-    def disputes_for(self, agent: str) -> list[dict]:
-        """Dispute views for scoring: every dispute where `agent` is the
-        disputed party, with status and outcome for fault assignment."""
+    def disputes_for(self, agent: str | None = None) -> list[dict]:
+        """Dispute views; for one disputed party when `agent` is given,
+        all disputes otherwise. Status and outcome for fault assignment."""
         return [
             self._view_from_slot(slot)
             for slot in self._dispute_index().values()
-            if slot.get("opened", {}).get("agent") == agent
+            if "opened" in slot and (agent is None or slot["opened"].get("agent") == agent)
         ]
 
     def all_disputes(self) -> list[dict]:
