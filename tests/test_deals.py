@@ -177,6 +177,40 @@ def test_open_validations():
             pass
 
 
+def test_contested_settlement_flagged_when_court_overturns_evidence():
+    with tempfile.TemporaryDirectory() as tmp:
+        (registry, payer_key, payee_key, arbiter_key, payer_did, payee_did, arbiter_did) = setup_world(tmp)
+
+        def settled_deal() -> tuple[str, str]:
+            deal = open_default(
+                registry, payer_key, payee_key, payee_did, arbiter=arbiter_did
+            )
+            att = registry.attest(
+                payee_did, "task_completed", key_file=payer_key,
+                payload={"deal": deal["id"], "value_usd": 100.0},
+            )
+            registry.settle_deal(deal["id"], settlement=att.id, key_file=payer_key)
+            return deal["id"], att.id
+
+        # a deal whose evidence the court later upholds a dispute against
+        contested_deal, contested_att = settled_deal()
+        dsp = registry.open_dispute(
+            contested_att, "work was never delivered", key_file=payer_key, arbiter=arbiter_did
+        )["id"]
+        registry.resolve_dispute(dsp, "upheld", key_files=[arbiter_key])
+        view = registry.deal_view(contested_deal)
+        assert view["status"] == "settled"
+        assert view["contested"] is True
+        assert any(d.get("contested") for d in registry.deals_for(payee_did))
+
+        # a clean deal and a rejected dispute leave no contest flag
+        clean_deal, clean_att = settled_deal()
+        assert "contested" not in registry.deal_view(clean_deal)
+        dsp2 = registry.open_dispute(clean_att, "false alarm", key_file=payer_key)["id"]
+        registry.resolve_dispute(dsp2, "rejected", key_files=[payer_key, payee_key])
+        assert "contested" not in registry.deal_view(clean_deal)
+
+
 def test_backdated_settlement_cannot_resurrect_expired_deal():
     import time
 

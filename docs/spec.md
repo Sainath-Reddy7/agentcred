@@ -411,6 +411,13 @@ bonus points. Deal records verify on the chain like every other record
 (opened: two party signatures; settled: signer + settlement-reference
 structural check; cancelled: two party signatures).
 
+**Contested settlements (v0.7.2).** The court and the deal layer are
+connected: if a dispute over a settled deal's condition attestation is
+later **upheld**, the deal view carries `contested: true`. The chain is
+immutable, so the settlement record stands — but any consumer reading
+the deal is warned that its evidence was overturned in court. A rejected
+or settled dispute contests nothing.
+
 ### Honest limits
 
 The registry proves conditions were met; it does not move money, and a

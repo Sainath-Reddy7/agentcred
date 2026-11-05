@@ -810,7 +810,18 @@ class Registry:
         append(self.log_path, entry)
         return entry
 
-    def _deal_view_from_slot(self, slot: dict) -> dict:
+    def _contested_targets(self) -> set[str]:
+        """Attestation ids whose disputes were UPHELD — their evidence was
+        overturned in court, so any deal settled on them is contested."""
+        contested = set()
+        for slot in self._dispute_index().values():
+            opened = slot.get("opened")
+            resolution = slot.get("resolution") or {}
+            if opened and resolution.get("outcome") == "upheld":
+                contested.add(opened["target"])
+        return contested
+
+    def _deal_view_from_slot(self, slot: dict, contested_targets: set[str] | None = None) -> dict:
         opened = slot["opened"]
         view = {
             k: opened[k] for k in
@@ -822,6 +833,12 @@ class Registry:
             view["status"] = "settled"
             view["settlement"] = slot["settled"]["settlement"]
             view["settled_at"] = slot["settled"]["settled_at"]
+            if contested_targets is None:
+                contested_targets = self._contested_targets()
+            if view["settlement"] in contested_targets:
+                # the chain is immutable — the record stands, but consumers
+                # are warned its evidence was overturned in court (§10/§11)
+                view["contested"] = True
         elif slot.get("cancelled") is not None:
             view["status"] = "cancelled"
         else:
@@ -839,11 +856,12 @@ class Registry:
         return self._deal_view_from_slot(slot)
 
     def deals_for(self, agent: str | None = None) -> list[dict]:
+        contested_targets = self._contested_targets()  # one pass, not one per deal
         views = []
         for slot in self._deal_index().values():
             if "opened" not in slot:
                 continue
-            view = self._deal_view_from_slot(slot)
+            view = self._deal_view_from_slot(slot, contested_targets)
             if agent is None or agent in (view["payer"], view["payee"]):
                 views.append(view)
         return views
