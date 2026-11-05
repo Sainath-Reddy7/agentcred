@@ -740,10 +740,11 @@ class Registry:
         opened_at = datetime.fromisoformat(deal["opened_at"].replace("Z", "+00:00"))
         if att_signed < opened_at:
             raise ValueError("condition attestation predates the deal")
-        settled_at = datetime.fromisoformat(core["settled_at"].replace("Z", "+00:00"))
         if deal.get("deadline"):
+            # the registry clock decides, never the client's settled_at —
+            # a backdated settlement must not resurrect an expired deal
             deadline_dt = datetime.fromisoformat(str(deal["deadline"]).replace("Z", "+00:00"))
-            if settled_at > deadline_dt and core["settled_by"] != deal.get("arbiter"):
+            if datetime.now(timezone.utc) > deadline_dt and core["settled_by"] != deal.get("arbiter"):
                 raise ValueError("deadline passed: only the arbiter may settle now")
 
         if len(signatures) != 1:

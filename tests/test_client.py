@@ -170,6 +170,21 @@ def _capture_agents(base: str) -> str:
     return "\n".join(f"{a['did']}  {a['display_name']}" for a in agents)
 
 
+def test_client_times_out_fast():
+    """A dead/black-hole registry must raise ClientError quickly, not hang."""
+    import time as _time
+
+    remote = RemoteRegistry("http://10.255.255.1:8000", timeout=1.0)  # non-routable
+    started = _time.monotonic()
+    try:
+        remote.verify()
+        raise AssertionError("black-hole registry responded?!")
+    except ClientError as exc:
+        assert "timed out" in str(exc) or "cannot reach" in str(exc)
+    elapsed = _time.monotonic() - started
+    assert elapsed < 10, f"took {elapsed:.1f}s to fail — effectively hanging"
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
