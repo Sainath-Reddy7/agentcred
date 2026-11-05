@@ -43,8 +43,9 @@ def _public(jwk: dict) -> dict:
 
 
 class RemoteRegistry:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, timeout: float = 15.0):
         self.base = base_url.rstrip("/")
+        self.timeout = timeout  # a dead registry must fail fast, not hang the CLI
 
     # -- transport ------------------------------------------------------
 
@@ -57,7 +58,7 @@ class RemoteRegistry:
             headers={"content-type": "application/json"} if data is not None else {},
         )
         try:
-            with urllib.request.urlopen(request) as response:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")
@@ -66,7 +67,11 @@ class RemoteRegistry:
             except (json.JSONDecodeError, ValueError):
                 pass
             raise ClientError(exc.code, f"registry rejected ({exc.code}): {detail}") from None
+        except TimeoutError as exc:
+            raise ClientError(0, f"registry at {self.base} timed out after {self.timeout}s") from exc
         except urllib.error.URLError as exc:
+            if isinstance(exc.reason, TimeoutError):
+                raise ClientError(0, f"registry at {self.base} timed out after {self.timeout}s") from exc
             raise ClientError(0, f"cannot reach registry at {self.base}: {exc.reason}") from None
 
     # -- identity -------------------------------------------------------

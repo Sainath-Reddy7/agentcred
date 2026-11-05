@@ -177,6 +177,35 @@ def test_open_validations():
             pass
 
 
+def test_backdated_settlement_cannot_resurrect_expired_deal():
+    import time
+
+    with tempfile.TemporaryDirectory() as tmp:
+        (registry, payer_key, payee_key, _, payer_did, payee_did, _) = setup_world(tmp)
+        from agentcred.canonical import canonical
+        from agentcred.crypto import read_key, sign
+
+        near = (datetime.now(timezone.utc) + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        deal = open_default(registry, payer_key, payee_key, payee_did, deadline=near)
+        att = registry.attest(
+            payee_did, "task_completed", key_file=payer_key, payload={"deal": deal["id"]}
+        )
+        time.sleep(2)
+        assert registry.deal_view(deal["id"])["status"] == "expired"
+
+        backdated = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        core = {
+            "kind": "deal.settled", "deal": deal["id"], "settlement": att.id,
+            "settled_by": payer_did, "settled_at": backdated,
+        }
+        try:
+            registry.commit_deal_settle(core, [sign(canonical(core), read_key(payer_key))])
+            raise AssertionError("backdated settlement accepted on an expired deal")
+        except ValueError:
+            pass
+        assert registry.deal_view(deal["id"])["status"] == "expired"
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
