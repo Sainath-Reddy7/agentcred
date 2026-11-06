@@ -150,6 +150,12 @@ rate lands D; single-attester histories stay under 500; a one-year-stale
 history drops below 600 while the same history kept active holds 700+;
 serial false accusers are flagged and demoted.
 
+**Score explanations (v0.7.4).** Every trust report carries a `factors`
+breakdown — base, reliability×depth, track-record depth, settled value,
+tenure, dispute load, false accusations — so a consumer can always answer
+*why this score*. Within the un-clamped range the factors sum exactly to
+the score; at the 300/900 clamp bounds the recorded score is the clamp.
+
 Remaining limits, deliberate and documented: attester weighting is an
 open problem — pure peer-standing cannot distinguish a 3-agent collusion
 ring from an honest cluster without outside anchors (§6); raw v0.2
