@@ -128,7 +128,13 @@ def score_agent(
     total_disputes = m["disputes_open"] + dv["open"] + dv["upheld"]
 
     if m["interactions"] == 0 and total_disputes == 0 and false_accusations == 0:
-        return {"score": SCORE_FLOOR, "band": band_for(SCORE_FLOOR), "metrics": m, "flags": ["unproven"]}
+        return {
+            "score": SCORE_FLOOR,
+            "band": band_for(SCORE_FLOOR),
+            "metrics": m,
+            "flags": ["unproven"],
+            "factors": {"base": SCORE_FLOOR},
+        }
 
     interactions = m["interactions"]
     reliability = interactions / max(1, interactions + 2 * total_disputes)
@@ -138,15 +144,16 @@ def score_agent(
     dispute_load = min(1.0, total_disputes / max(1, interactions))
     accuser_load = min(1.0, false_accusations / 3)
 
-    score = (
-        SCORE_FLOOR
-        + 350.0 * reliability * depth
-        + 200.0 * depth
-        + 100.0 * value
-        + 50.0 * tenure
-        - 300.0 * dispute_load
-        - 100.0 * accuser_load
-    )
+    factors = {
+        "base": SCORE_FLOOR,
+        "reliability_x_depth": round(350.0 * reliability * depth, 1),
+        "track_record_depth": round(200.0 * depth, 1),
+        "settled_value": round(100.0 * value, 1),
+        "tenure": round(50.0 * tenure, 1),
+        "dispute_load": round(-300.0 * dispute_load, 1) + 0.0,  # +0.0 avoids -0.0
+        "false_accusations": round(-100.0 * accuser_load, 1) + 0.0,
+    }
+    score = SCORE_FLOOR + sum(v for k, v in factors.items() if k != "base")
     score = round(max(SCORE_FLOOR, min(900.0, score)), 1)
 
     flags: list[str] = []
@@ -155,4 +162,4 @@ def score_agent(
     if false_accusations >= 2:
         flags.append("serial_false_accuser")
 
-    return {"score": score, "band": band_for(score), "metrics": m, "flags": flags}
+    return {"score": score, "band": band_for(score), "metrics": m, "flags": flags, "factors": factors}

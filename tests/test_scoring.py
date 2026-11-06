@@ -157,6 +157,21 @@ def test_false_accusations_penalized_and_flagged():
     assert "serial_false_accuser" not in one_off["flags"]
 
 
+def test_factors_explain_the_score():
+    log = [att(f"t{i}", "task_completed", attester=i % 3 + 1, days_ago=60) for i in range(12)]
+    result = score_agent(log, now=NOW)
+    factors = result["factors"]
+    assert factors["base"] == 300
+    # within the un-clamped range, the factors must sum to the score
+    assert abs(sum(factors.values()) - result["score"]) < 0.5
+    assert factors["track_record_depth"] > 0 and factors["reliability_x_depth"] > 0
+    assert factors["dispute_load"] == 0 and factors["false_accusations"] == 0
+
+    # unproven agents get the floor and nothing else
+    fresh = score_agent([], now=NOW)
+    assert fresh["factors"] == {"base": 300}
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
