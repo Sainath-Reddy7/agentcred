@@ -13,17 +13,14 @@ docs/spec.md §8.
 from __future__ import annotations
 
 import json
-import os
-import time
-from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
 from .canonical import canonical
+from .locking import file_lock
 
 GENESIS = "0" * 64
-LOCK_TIMEOUT = 5.0
 
 
 class LogTamperError(Exception):
@@ -33,32 +30,6 @@ class LogTamperError(Exception):
         self.index = index
         self.reason = reason
         super().__init__(f"record {index}: {reason}")
-
-
-@contextmanager
-def _log_lock(log_path: Path):
-    """Best-effort mutual exclusion via an exclusively-created lockfile.
-
-    Portable (no fcntl/msvcrt). A crashed writer can leave a stale lock;
-    append then raises TimeoutError after LOCK_TIMEOUT seconds — delete the
-    stale lockfile to recover.
-    """
-    lock_path = log_path.parent / (log_path.name + ".lock")
-    deadline = time.monotonic() + LOCK_TIMEOUT
-    fd = None
-    while fd is None:
-        try:
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"{lock_path} is held — stale lock?")
-            time.sleep(0.05)
-    try:
-        yield
-    finally:
-        os.close(fd)
-        with suppress(OSError):
-            lock_path.unlink()
 
 
 @dataclass(frozen=True)
@@ -97,7 +68,7 @@ def load(log_path: str | Path) -> list[LogRecord]:
 def append(log_path: str | Path, entry: dict) -> LogRecord:
     """Append an entry under the log lock; returns the committed record."""
     path = Path(log_path)
-    with _log_lock(path):
+    with file_lock(path):
         records = load(path)
         prev = records[-1].hash if records else GENESIS
         index = len(records)

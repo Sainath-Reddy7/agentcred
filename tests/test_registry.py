@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -194,6 +195,27 @@ def test_query_unknown_agent_rejected():
             pass
         else:
             raise AssertionError("query on unknown agent succeeded")
+
+
+def test_concurrent_registrations_do_not_lose_identities():
+    """agents.json mutations must be serialized — uvicorn runs sync
+    endpoints in a threadpool, and the unlocked version lost 8 of 10."""
+    with tempfile.TemporaryDirectory() as tmp:
+        registry = Registry(Path(tmp) / "state")
+        keys = []
+        for i in range(10):
+            key = Path(tmp) / f"race{i}.json"
+            write_key(generate_keypair(), key)
+            keys.append(key)
+        threads = [
+            threading.Thread(target=registry.register, args=(keys[i],), kwargs={"display_name": f"racer-{i}"})
+            for i in range(10)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert len(registry.agents()) == 10
 
 
 if __name__ == "__main__":
