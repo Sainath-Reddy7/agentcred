@@ -21,6 +21,7 @@ from nacl.exceptions import BadSignatureError
 
 from .canonical import canonical
 from .crypto import did_from_jwk, read_key, sign, sign_attestation, verify, verify_attestation
+from .locking import file_lock
 from .log import LogTamperError, append, load, verify_chain
 from .models import Attestation
 from .scoring import score_agent
@@ -100,27 +101,28 @@ class Registry:
         capabilities: tuple[str, ...] = (),
     ) -> dict:
         """Register an identity from a JWK (private file or public-only)."""
-        did = did_from_jwk(jwk)
-        agents = self._load_agents()
-        public = {k: jwk[k] for k in ("kty", "crv", "x")}
-        for existing in agents.values():
-            if existing["public_key"] == public:
-                raise ValueError(f"key already registered as {existing['did']}")
-        if did in agents:
-            raise ValueError(f"{did} is already registered")
-        identity = {
-            "did": did,
-            "owner": did,  # self-owned until v0.3 owner-key binding
-            "display_name": display_name or did,
-            "capabilities": list(capabilities),
-            "public_key": {k: jwk[k] for k in ("kty", "crv", "x")},
-            "created_at": _now(),
-            "revoked": False,
-            "version": 1,
-        }
-        agents[did] = identity
-        self._save_agents(agents)
-        return identity
+        with file_lock(self.agents_path):
+            did = did_from_jwk(jwk)
+            agents = self._load_agents()
+            public = {k: jwk[k] for k in ("kty", "crv", "x")}
+            for existing in agents.values():
+                if existing["public_key"] == public:
+                    raise ValueError(f"key already registered as {existing['did']}")
+            if did in agents:
+                raise ValueError(f"{did} is already registered")
+            identity = {
+                "did": did,
+                "owner": did,  # self-owned until v0.3 owner-key binding
+                "display_name": display_name or did,
+                "capabilities": list(capabilities),
+                "public_key": {k: jwk[k] for k in ("kty", "crv", "x")},
+                "created_at": _now(),
+                "revoked": False,
+                "version": 1,
+            }
+            agents[did] = identity
+            self._save_agents(agents)
+            return identity
 
     def identity(self, did: str) -> dict | None:
         return self._load_agents().get(did)
@@ -139,18 +141,19 @@ class Registry:
 
     def revoke_identity(self, did: str) -> dict:
         """Apply revocation after authority has been established."""
-        agents = self._load_agents()
-        identity = agents.get(did)
-        if identity is None:
-            raise ValueError(f"unknown agent {did}")
-        if identity["revoked"]:
-            raise ValueError(f"{did} is already revoked")
-        identity["revoked"] = True
-        identity["revoked_at"] = _now()
-        identity["version"] += 1
-        agents[did] = identity
-        self._save_agents(agents)
-        return identity
+        with file_lock(self.agents_path):
+            agents = self._load_agents()
+            identity = agents.get(did)
+            if identity is None:
+                raise ValueError(f"unknown agent {did}")
+            if identity["revoked"]:
+                raise ValueError(f"{did} is already revoked")
+            identity["revoked"] = True
+            identity["revoked_at"] = _now()
+            identity["version"] += 1
+            agents[did] = identity
+            self._save_agents(agents)
+            return identity
 
     # -- key rotation (v0.5) ---------------------------------------------
 
@@ -181,41 +184,47 @@ class Registry:
         return self._load_agents()[did]
 
     def commit_rotation_record(self, core: dict, signatures: list[str]) -> dict:
-        """Verify and apply a pre-signed key rotation (API path)."""
-        agents = self._load_agents()
-        did = core.get("agent")
-        identity = agents.get(did)
-        if identity is None:
-            raise ValueError(f"unknown agent {did}")
-        if identity["revoked"]:
-            raise ValueError(f"{did} is revoked")
-        if core.get("kind") != "key.rotated":
-            raise ValueError("expected a key.rotated record")
-        for field in ("old_public_jwk", "new_public_jwk", "rotated_at"):
-            if field not in core:
-                raise ValueError(f"key.rotated missing field {field}")
-        if core["old_public_jwk"] != identity["public_key"]:
-            raise ValueError("old_public_jwk does not match the registered key")
-        if core["new_public_jwk"] == core["old_public_jwk"]:
-            raise ValueError("new key equals the current key")
-        if not _valid_ts(core["rotated_at"]):
-            raise ValueError("rotated_at must be ISO-8601 UTC, within clock-skew tolerance of now")
-        for other_did, other in agents.items():
-            if other_did != did and other["public_key"] == core["new_public_jwk"]:
-                raise ValueError(f"new key already belongs to {other_did}")
-        if len(signatures) != 1:
-            raise ValueError("key.rotated carries exactly one signature")
-        try:
-            verify(canonical(core), signatures[0], identity["public_key"])
-        except BadSignatureError as exc:
-            raise ValueError(f"rotation signature does not verify: {exc}") from exc
-        append(self.log_path, core | {"signatures": list(signatures)})
-        identity["public_key"] = core["new_public_jwk"]
-        identity["rotated_at"] = core["rotated_at"]
-        identity["version"] += 1
-        agents[did] = identity
-        self._save_agents(agents)
-        return core | {"signatures": list(signatures)}
+        """Verify and apply a pre-signed key rotation (API path).
+
+        Holds the agents-state lock across verify→chain-append→save so a
+        concurrent register/revoke cannot interleave (the log lock nests
+        inside; ordering is always state→log, so no deadlock).
+        """
+        with file_lock(self.agents_path):
+            agents = self._load_agents()
+            did = core.get("agent")
+            identity = agents.get(did)
+            if identity is None:
+                raise ValueError(f"unknown agent {did}")
+            if identity["revoked"]:
+                raise ValueError(f"{did} is revoked")
+            if core.get("kind") != "key.rotated":
+                raise ValueError("expected a key.rotated record")
+            for field in ("old_public_jwk", "new_public_jwk", "rotated_at"):
+                if field not in core:
+                    raise ValueError(f"key.rotated missing field {field}")
+            if core["old_public_jwk"] != identity["public_key"]:
+                raise ValueError("old_public_jwk does not match the registered key")
+            if core["new_public_jwk"] == core["old_public_jwk"]:
+                raise ValueError("new key equals the current key")
+            if not _valid_ts(core["rotated_at"]):
+                raise ValueError("rotated_at must be ISO-8601 UTC, within clock-skew tolerance of now")
+            for other_did, other in agents.items():
+                if other_did != did and other["public_key"] == core["new_public_jwk"]:
+                    raise ValueError(f"new key already belongs to {other_did}")
+            if len(signatures) != 1:
+                raise ValueError("key.rotated carries exactly one signature")
+            try:
+                verify(canonical(core), signatures[0], identity["public_key"])
+            except BadSignatureError as exc:
+                raise ValueError(f"rotation signature does not verify: {exc}") from exc
+            append(self.log_path, core | {"signatures": list(signatures)})
+            identity["public_key"] = core["new_public_jwk"]
+            identity["rotated_at"] = core["rotated_at"]
+            identity["version"] += 1
+            agents[did] = identity
+            self._save_agents(agents)
+            return core | {"signatures": list(signatures)}
 
     # -- attestations ---------------------------------------------------
 
