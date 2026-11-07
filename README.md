@@ -93,7 +93,7 @@ sequenceDiagram
 │   ├── evidence.py               # Offline evidence-bundle verifier
 │   ├── api.py                    # HTTP registry API (FastAPI)
 │   └── cli.py                    # The `agentcred` command
-└── tests/                        # Test suite (87 tests)
+└── tests/                        # Test suite (88 tests)
 ```
 
 ## Quickstart

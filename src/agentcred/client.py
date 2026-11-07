@@ -172,8 +172,17 @@ class RemoteRegistry:
     def query(self, agent: str) -> dict:
         return self._call("GET", f"/agents/{agent}")
 
-    def verify(self) -> dict:
-        return self._call("GET", "/verify")
+    def anchor(self) -> dict:
+        return self._call("GET", "/anchor")
+
+    def verify(self, expected_head: str | None = None, expected_length: int | None = None) -> dict:
+        params = []
+        if expected_head:
+            params.append(f"expected_head={expected_head}")
+        if expected_length is not None:
+            params.append(f"expected_length={expected_length}")
+        path = "/verify" + ("?" + "&".join(params) if params else "")
+        return self._call("GET", path)
 
     # -- disputes -------------------------------------------------------
 
