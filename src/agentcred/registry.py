@@ -939,10 +939,29 @@ class Registry:
             ),
         }
 
-    def verify(self) -> dict:
+    def head(self) -> dict:
+        """Chain head anchor: last record hash + record count.
+
+        A hash chain proves its records are unmodified, but a truncated
+        chain is internally consistent — completeness can only be proven
+        against an anchor published OUTSIDE the log file. Record this
+        somewhere the log cannot rewrite (another system, a printed
+        checkpoint, a commit) and verify against it.
+        """
+        records = self._records()
+        return {
+            "head": records[-1].hash if records else "0" * 64,
+            "length": len(records),
+        }
+
+    def verify(
+        self,
+        expected_head: str | None = None,
+        expected_length: int | None = None,
+    ) -> dict:
         """Walk the log: chain integrity + every signature against the
-        registered attester key. Returns a report; `ok` is False on any
-        problem."""
+        registered attester key, optionally against external head/length
+        anchors (truncation detection). `ok` is False on any problem."""
         problems: list[dict] = []
         chain = "ok"
         records = []
@@ -952,6 +971,18 @@ class Registry:
         except LogTamperError as exc:
             chain = f"broken at record {exc.index}: {exc.reason}"
             problems.append({"index": exc.index, "issue": "chain", "detail": str(exc)})
+
+        anchors = self.head()
+        if expected_head is not None and expected_head != anchors["head"]:
+            problems.append(
+                {"issue": "head_anchor_mismatch",
+                 "detail": f"expected {expected_head}, chain head is {anchors['head']} — history was truncated or rewound"}
+            )
+        if expected_length is not None and expected_length != anchors["length"]:
+            problems.append(
+                {"issue": "length_anchor_mismatch",
+                 "detail": f"expected {expected_length} records, found {anchors['length']}"}
+            )
 
         agents = self._load_agents()
         valid = 0

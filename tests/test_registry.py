@@ -207,15 +207,50 @@ def test_concurrent_registrations_do_not_lose_identities():
             key = Path(tmp) / f"race{i}.json"
             write_key(generate_keypair(), key)
             keys.append(key)
-        threads = [
-            threading.Thread(target=registry.register, args=(keys[i],), kwargs={"display_name": f"racer-{i}"})
-            for i in range(10)
-        ]
+
+        errors: list[Exception] = []
+
+        def register(i: int) -> None:
+            try:
+                registry.register(keys[i], display_name=f"racer-{i}")
+            except Exception as exc:  # noqa: BLE001 — surface thread failures
+                errors.append(exc)
+
+        threads = [threading.Thread(target=register, args=(i,)) for i in range(10)]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
+        assert not errors, errors
         assert len(registry.agents()) == 10
+
+
+def test_head_anchor_detects_tail_truncation():
+    """A truncated chain is internally consistent — only an external head
+    anchor catches it (audit round 8 integrity assault finding)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        registry, _, buyer_key, seller_did, _ = setup_world(tmp)
+        for _ in range(3):
+            registry.attest(seller_did, "task_completed", key_file=buyer_key)
+        anchor = registry.head()
+        assert anchor["length"] == 3 and len(anchor["head"]) == 64
+
+        # drop the newest record: bare verify() cannot see it...
+        lines = registry.log_path.read_text(encoding="utf-8").splitlines()
+        registry.log_path.write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
+        assert registry.verify()["ok"] is True  # the honest limitation
+
+        # ...but the anchored verify can
+        report = registry.verify(expected_head=anchor["head"])
+        assert not report["ok"]
+        assert any(p["issue"] == "head_anchor_mismatch" for p in report["problems"])
+        report = registry.verify(expected_length=anchor["length"])
+        assert not report["ok"]
+        assert any(p["issue"] == "length_anchor_mismatch" for p in report["problems"])
+
+        # a healthy chain passes the anchored check untouched
+        grown = registry.verify(expected_head=registry.head()["head"])
+        assert grown["ok"]
 
 
 if __name__ == "__main__":

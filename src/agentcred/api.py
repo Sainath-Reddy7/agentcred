@@ -80,7 +80,8 @@ def create_app(state_dir: str | None = None) -> FastAPI:
                 "POST /deals/{id}/cancel — mutual cancellation",
                 "POST /agents/{did}/revoke — revoke (signature over revocation intent)",
                 "POST /agents/{did}/rotate — rotate the identity's key (old key signs)",
-                "GET /verify — log chain + signature report",
+                "GET /verify — log chain + signature report (optional ?expected_head= truncation anchor)",
+                "GET /anchor — chain head anchor for external publication",
                 "GET /health",
             ],
         }
@@ -393,8 +394,15 @@ def create_app(state_dir: str | None = None) -> FastAPI:
             raise HTTPException(code, message) from exc
         return {"cancelled": deal_id, "record": entry}
 
+    @app.get("/anchor")
+    def anchor() -> dict:
+        """Chain head anchor — publish it anywhere the log cannot rewrite."""
+        return reg().head()
+
     @app.get("/verify")
-    def verify_registry() -> dict:
-        return reg().verify()
+    def verify_registry(
+        expected_head: str | None = None, expected_length: int | None = None
+    ) -> dict:
+        return reg().verify(expected_head=expected_head, expected_length=expected_length)
 
     return app

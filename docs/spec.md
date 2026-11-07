@@ -240,6 +240,19 @@ reordering anywhere in history breaks the chain and is detectable by anyone
 re-walking the log. Note: the chain proves *integrity* (history unchanged),
 not *truth* (attestations honest) — the latter is the scoring layer's job.
 
+### Anchoring (v0.7.5) — the one thing a chain cannot prove alone
+
+**Tail truncation is undetectable from the log itself**: dropping the
+newest records leaves a shorter, perfectly self-consistent chain. Any
+hash chain has this property; completeness needs an external witness.
+`GET /anchor` / `agentcred anchor` emits the chain head (last record
+hash + record count). Publish it anywhere the log file cannot rewrite —
+another system, a printed checkpoint, a git commit — and verify against
+it: `agentcred verify --expect-head <hash> --expect-length <n>` reports
+`head_anchor_mismatch` / `length_anchor_mismatch` on truncation or
+rewind. Evidence bundles carry the same head in `meta` for exactly this
+purpose.
+
 ## 9. Registry HTTP API (v0.3)
 
 `agentcred serve` exposes a registry over JSON/HTTP (FastAPI reference

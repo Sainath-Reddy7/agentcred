@@ -133,8 +133,20 @@ def cmd_query(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_anchor(args: argparse.Namespace) -> int:
+    anchor = _registry(args).head()
+    print(f"head:   {anchor['head']}")
+    print(f"length: {anchor['length']}")
+    print("# publish this somewhere the log cannot rewrite, then:")
+    print(f"# agentcred verify --expect-head {anchor['head']} --expect-length {anchor['length']}")
+    return 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
-    report = _registry(args).verify()
+    report = _registry(args).verify(
+        expected_head=getattr(args, "expect_head", None),
+        expected_length=getattr(args, "expect_length", None),
+    )
     print(json.dumps(report, indent=2))
     return 0 if report["ok"] else 1
 
@@ -255,7 +267,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_query)
 
     p = sub.add_parser("verify", help="verify log chain and all signatures")
+    p.add_argument(
+        "--expect-head", default=None,
+        help="chain head hash from 'agentcred anchor' — detects truncation",
+    )
+    p.add_argument(
+        "--expect-length", type=int, default=None,
+        help="expected record count, another truncation anchor",
+    )
     p.set_defaults(func=cmd_verify)
+
+    p = sub.add_parser("anchor", help="print the chain head anchor for external publication")
+    p.set_defaults(func=cmd_anchor)
 
     p = sub.add_parser("revoke", help="revoke the identity a key owns (self-service, one-way)")
     p.add_argument("--key", required=True, help="private JWK file of the identity to revoke")
