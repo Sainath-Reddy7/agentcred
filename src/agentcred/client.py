@@ -93,17 +93,30 @@ class RemoteRegistry:
         key_file: str | Path,
         display_name: str | None = None,
         capabilities: tuple[str, ...] = (),
+        owner_key_file: str | Path | None = None,
     ) -> dict:
         jwk = read_key(key_file)
-        return self._call(
-            "POST",
-            "/agents",
-            {
-                "public_jwk": _public(jwk),
-                "display_name": display_name,
-                "capabilities": list(capabilities),
-            },
-        )
+        body: dict = {
+            "public_jwk": _public(jwk),
+            "display_name": display_name,
+            "capabilities": list(capabilities),
+        }
+        if owner_key_file is not None:
+            owner_jwk = read_key(owner_key_file)
+            owner_public = _public(owner_jwk)
+            core = {
+                "kind": "owner.bound",
+                "agent": did_from_jwk(jwk),
+                "owner": did_from_jwk(owner_jwk),
+                "owner_public_jwk": owner_public,
+                "bound_at": _now(),
+            }
+            body |= {
+                "owner_public_jwk": owner_public,
+                "bound_at": core["bound_at"],
+                "owner_signature": sign(canonical(core), owner_jwk),
+            }
+        return self._call("POST", "/agents", body)
 
     def identity(self, agent: str) -> dict:
         return self.query(agent)["identity"]

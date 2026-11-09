@@ -78,9 +78,25 @@ class Registry:
         key_file: str | Path,
         display_name: str | None = None,
         capabilities: tuple[str, ...] = (),
+        owner_key_file: str | Path | None = None,
     ) -> dict:
+        owner_bind = None
+        if owner_key_file is not None:
+            owner_jwk = read_key(owner_key_file)
+            owner_public = {k: owner_jwk[k] for k in ("kty", "crv", "x")}
+            core = {
+                "kind": "owner.bound",
+                "agent": did_from_jwk(read_key(key_file)),
+                "owner": did_from_jwk(owner_jwk),
+                "owner_public_jwk": owner_public,
+                "bound_at": _now(),
+            }
+            owner_bind = {"core": core, "signature": sign(canonical(core), owner_jwk)}
         return self.register_jwk(
-            read_key(key_file), display_name=display_name, capabilities=capabilities
+            read_key(key_file),
+            display_name=display_name,
+            capabilities=capabilities,
+            owner_bind=owner_bind,
         )
 
     def did_for_key(self, jwk: dict) -> str | None:
@@ -99,8 +115,14 @@ class Registry:
         jwk: dict,
         display_name: str | None = None,
         capabilities: tuple[str, ...] = (),
+        owner_bind: dict | None = None,
     ) -> dict:
-        """Register an identity from a JWK (private file or public-only)."""
+        """Register an identity from a JWK (private file or public-only).
+
+        With `owner_bind` (core + owner signature) the identity is bound
+        to an accountable principal who can later revoke the agent and
+        rotate a lost agent key (spec §2).
+        """
         with file_lock(self.agents_path):
             did = did_from_jwk(jwk)
             agents = self._load_agents()
@@ -112,16 +134,42 @@ class Registry:
                 raise ValueError(f"{did} is already registered")
             identity = {
                 "did": did,
-                "owner": did,  # self-owned until v0.3 owner-key binding
+                "owner": did,  # self-owned unless an owner binding says otherwise
                 "display_name": display_name or did,
                 "capabilities": list(capabilities),
                 "public_key": {k: jwk[k] for k in ("kty", "crv", "x")},
                 "created_at": _now(),
                 "revoked": False,
                 "version": 1,
+                "owner_key": None,
             }
+            if owner_bind is not None:
+                core = owner_bind["core"]
+                if core.get("kind") != "owner.bound":
+                    raise ValueError("expected an owner.bound record")
+                if core.get("agent") != did:
+                    raise ValueError("owner binding names a different agent")
+                if core.get("owner") != did_from_jwk(core.get("owner_public_jwk") or {}):
+                    raise ValueError("owner did does not match owner_public_jwk")
+                if not _valid_ts(core.get("bound_at")):
+                    raise ValueError("bound_at must be ISO-8601 UTC, within clock-skew tolerance of now")
+                try:
+                    verify(
+                        canonical(core), owner_bind["signature"], core["owner_public_jwk"]
+                    )
+                except BadSignatureError as exc:
+                    raise ValueError(f"owner binding signature does not verify: {exc}") from exc
+                if any(
+                    other.get("owner_key") == core["owner_public_jwk"]
+                    for other in agents.values()
+                ):
+                    raise ValueError("owner key already binds another identity")
+                identity["owner"] = core["owner"]
+                identity["owner_key"] = core["owner_public_jwk"]
             agents[did] = identity
             self._save_agents(agents)
+            if owner_bind is not None:
+                append(self.log_path, owner_bind["core"] | {"signatures": [owner_bind["signature"]]})
             return identity
 
     def identity(self, did: str) -> dict | None:
@@ -130,13 +178,18 @@ class Registry:
     def revoke(self, did: str, key_file: str | Path) -> dict:
         """Self-service, one-way revocation.
 
-        Possession of the identity's current private key is the authority
-        to revoke it. History is kept; the identity is excluded from new
-        attestations in both directions.
+        Authority: the identity's current private key, or — for owner-bound
+        identities — the owner's key (this is the recovery path when the
+        agent key is lost or compromised). History is kept; the identity is
+        excluded from new attestations in both directions.
         """
-        holder = self.did_for_key(read_key(key_file))
-        if holder != did:
-            raise ValueError(f"key belongs to {holder or 'no registered identity'}, not {did}")
+        public = {k: read_key(key_file)[k] for k in ("kty", "crv", "x")}
+        identity = self._load_agents().get(did)
+        if identity is None:
+            raise ValueError(f"unknown agent {did}")
+        if identity["public_key"] != public:
+            if not (identity.get("owner_key") and identity["owner_key"] == public):
+                raise ValueError(f"key belongs neither to {did} nor to its owner")
         return self.revoke_identity(did)
 
     def revoke_identity(self, did: str) -> dict:
@@ -167,18 +220,26 @@ class Registry:
         """
         old_jwk = read_key(key_file)
         new_jwk = read_key(new_key_file)
-        holder = self.did_for_key(old_jwk)
-        if holder != did:
-            raise ValueError(
-                f"key belongs to {holder or 'no registered identity'}, not {did}"
-            )
+        authority_public = {k: old_jwk[k] for k in ("kty", "crv", "x")}
+        identity = self._load_agents().get(did)
+        if identity is None:
+            raise ValueError(f"unknown agent {did}")
+        if identity["public_key"] == authority_public:
+            authority = "self"
+        elif identity.get("owner_key") and identity["owner_key"] == authority_public:
+            authority = "owner"  # lost-key recovery: the owner rotates the agent's key
+        else:
+            raise ValueError(f"key belongs neither to {did} nor to its owner")
         core = {
             "kind": "key.rotated",
             "agent": did,
-            "old_public_jwk": self._load_agents()[did]["public_key"],
+            "authority": authority,
+            "old_public_jwk": identity["public_key"],
             "new_public_jwk": {k: new_jwk[k] for k in ("kty", "crv", "x")},
             "rotated_at": _now(),
         }
+        if authority == "owner":
+            core["authority_public_jwk"] = authority_public
         signature = sign(canonical(core), old_jwk)
         self.commit_rotation_record(core, [signature])
         return self._load_agents()[did]
@@ -203,6 +264,17 @@ class Registry:
             for field in ("old_public_jwk", "new_public_jwk", "rotated_at"):
                 if field not in core:
                     raise ValueError(f"key.rotated missing field {field}")
+            authority = core.get("authority", "self")
+            if authority not in ("self", "owner"):
+                raise ValueError("authority must be 'self' or 'owner'")
+            if authority == "owner":
+                if not identity.get("owner_key"):
+                    raise ValueError(f"{did} has no owner to rotate its key")
+                if core.get("authority_public_jwk") != identity["owner_key"]:
+                    raise ValueError("authority_public_jwk does not match the bound owner")
+                signing_key = core["authority_public_jwk"]
+            else:
+                signing_key = identity["public_key"]
             if core["old_public_jwk"] != identity["public_key"]:
                 raise ValueError("old_public_jwk does not match the registered key")
             if core["new_public_jwk"] == core["old_public_jwk"]:
@@ -212,10 +284,12 @@ class Registry:
             for other_did, other in agents.items():
                 if other_did != did and other["public_key"] == core["new_public_jwk"]:
                     raise ValueError(f"new key already belongs to {other_did}")
+                if other_did != did and other.get("owner_key") == core["new_public_jwk"]:
+                    raise ValueError(f"new key already binds {other_did} as owner")
             if len(signatures) != 1:
                 raise ValueError("key.rotated carries exactly one signature")
             try:
-                verify(canonical(core), signatures[0], identity["public_key"])
+                verify(canonical(core), signatures[0], signing_key)
             except BadSignatureError as exc:
                 raise ValueError(f"rotation signature does not verify: {exc}") from exc
             append(self.log_path, core | {"signatures": list(signatures)})
@@ -1069,6 +1143,22 @@ class Registry:
                 for who, signature in zip(entry.get("resolved_by", []), entry.get("signatures", [])):
                     if _check_sig(record.index, who, canonical(core), signature):
                         valid += 1
+            elif kind == "owner.bound":
+                core = {k: v for k, v in entry.items() if k != "signatures"}
+                if entry.get("agent") not in agents:
+                    problems.append(
+                        {"index": record.index, "issue": "unknown_agent", "detail": entry.get("agent")}
+                    )
+                    continue
+                # self-contained: owner consent proven against the owner key
+                # the record itself carries
+                try:
+                    verify(canonical(core), entry["signatures"][0], entry["owner_public_jwk"])
+                    valid += 1
+                except (BadSignatureError, ValueError, KeyError) as exc:
+                    problems.append(
+                        {"index": record.index, "issue": "bad_signature", "detail": str(exc)}
+                    )
             elif kind == "key.rotated":
                 core = {k: v for k, v in entry.items() if k != "signatures"}
                 if entry.get("agent") not in agents:
@@ -1076,10 +1166,15 @@ class Registry:
                         {"index": record.index, "issue": "unknown_agent", "detail": entry.get("agent")}
                     )
                     continue
-                # self-contained: verified against the old public key the
-                # record itself carries, so it stays provable post-rotation
+                # self-contained: 'self' rotations verify against the old agent
+                # key the record carries; owner rotations against the owner key
+                signing_key = (
+                    entry.get("authority_public_jwk")
+                    if entry.get("authority") == "owner"
+                    else entry["old_public_jwk"]
+                )
                 try:
-                    verify(canonical(core), entry["signatures"][0], entry["old_public_jwk"])
+                    verify(canonical(core), entry["signatures"][0], signing_key)
                     valid += 1
                 except (BadSignatureError, ValueError, KeyError) as exc:
                     problems.append(
