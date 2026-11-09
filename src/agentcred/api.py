@@ -28,12 +28,6 @@ from .registry import Registry
 FUTURE_TOLERANCE = timedelta(minutes=5)
 
 
-class RegisterBody(BaseModel):
-    public_jwk: dict
-    display_name: str | None = None
-    capabilities: list[str] = []
-
-
 class RevokeBody(BaseModel):
     signature: str
 
@@ -91,12 +85,28 @@ def create_app(state_dir: str | None = None) -> FastAPI:
         return {"ok": True, "version": __version__}
 
     @app.post("/agents", status_code=201)
-    def register(body: RegisterBody) -> dict:
+    def register(body: dict) -> dict:
+        public_jwk = body.get("public_jwk")
+        if not isinstance(public_jwk, dict):
+            raise HTTPException(400, "public_jwk is required")
+        owner_bind = None
+        if body.get("owner_signature"):
+            owner_bind = {
+                "core": {
+                    "kind": "owner.bound",
+                    "agent": did_from_jwk(public_jwk),
+                    "owner": did_from_jwk(body.get("owner_public_jwk") or {}),
+                    "owner_public_jwk": body.get("owner_public_jwk"),
+                    "bound_at": body.get("bound_at"),
+                },
+                "signature": body["owner_signature"],
+            }
         try:
             return reg().register_jwk(
-                body.public_jwk,
-                display_name=body.display_name,
-                capabilities=tuple(body.capabilities),
+                public_jwk,
+                display_name=body.get("display_name"),
+                capabilities=tuple(body.get("capabilities", [])),
+                owner_bind=owner_bind,
             )
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc

@@ -93,7 +93,7 @@ sequenceDiagram
 │   ├── evidence.py               # Offline evidence-bundle verifier
 │   ├── api.py                    # HTTP registry API (FastAPI)
 │   └── cli.py                    # The `agentcred` command
-└── tests/                        # Test suite (88 tests)
+└── tests/                        # Test suite (96 tests)
 ```
 
 ## Quickstart
@@ -122,6 +122,19 @@ agentcred revoke --key seller.json
 # compromise recovery without losing the identity: DID stays, key changes
 agentcred keygen --out seller-v2.json
 agentcred rotate --key seller.json --new-key seller-v2.json
+```
+
+### Owner binding & lost-key recovery (v0.8)
+
+Bind an accountable principal at registration — the owner can revoke the
+agent and rotate its key even when the agent key is lost:
+
+```bash
+agentcred keygen --out owner.json
+agentcred register --key bot.json --name shop-bot --owner-key owner.json
+# ...bot key lost? the owner recovers:
+agentcred keygen --out bot-v2.json
+agentcred rotate --key owner.json --agent did:agentcred:xxx --new-key bot-v2.json
 ```
 
 ## Deals — attestation-gated settlement (v0.6)

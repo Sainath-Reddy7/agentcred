@@ -39,8 +39,18 @@ the same attestation log.
 
 Rules:
 
-- The **owner** is accountable for the agent's actions. An agent with no
-  resolvable owner is unscoreable (band E, flag `no_owner`).
+- The **owner** (principal) is accountable for the agent's actions. By
+  default an identity is self-owned; registration may instead **bind an
+  owner** by submitting an `owner.bound` chain record — the owner's
+  signature over `{kind, agent, owner, owner_public_jwk, bound_at}` —
+  making the principal a real, resolvable party. One owner key binds at
+  most one identity. The owner holds two recovery authorities beyond
+  the agent's own key: **revoke** the identity, and **rotate the agent's
+  key** when it is lost (owner rotations carry
+  `authority: "owner"` + `authority_public_jwk` on the `key.rotated`
+  record, verified against the owner key). The spec's earlier
+  "no resolvable owner → unscoreable" rule remains a v1.0 enforcement
+  target; v0.8 records the binding and grants the authorities.
 - **Revocation** is one-way and self-service: possession of the identity's
   current private key is the authority to revoke it (`Registry.revoke`, CLI
   `agentcred revoke --key`). A revoked identity keeps its history but is
@@ -308,7 +318,7 @@ never leave the client process. The CLI drives it with the global
 
 The court system. The chain (§8) gains record kinds: `attestation` (the
 default, including all pre-v0.4 records), `dispute.opened`,
-`dispute.resolved`, and `key.rotated` (§2).
+`dispute.resolved`, `key.rotated`, and `owner.bound` (§2).
 
 ### Opening
 

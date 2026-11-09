@@ -35,9 +35,10 @@ def _registry(args: argparse.Namespace):
 
 def cmd_rotate(args: argparse.Namespace) -> int:
     registry = _registry(args)
-    did = registry.did_for_key(read_key(args.key))
+    did = getattr(args, "agent", None) or registry.did_for_key(read_key(args.key))
     if did is None:
-        print("error: key does not belong to any registered identity", file=sys.stderr)
+        print("error: key does not belong to any registered identity "
+              "(pass --agent did for owner rotation)", file=sys.stderr)
         return 2
     identity = registry.rotate(did, key_file=args.key, new_key_file=args.new_key)
     print(
@@ -109,7 +110,8 @@ def cmd_keygen(args: argparse.Namespace) -> int:
 def cmd_register(args: argparse.Namespace) -> int:
     registry = _registry(args)
     identity = registry.register(
-        key_file=args.key, display_name=args.name, capabilities=tuple(args.caps)
+        key_file=args.key, display_name=args.name, capabilities=tuple(args.caps),
+        owner_key_file=args.owner_key,
     )
     print(json.dumps(identity, indent=2))
     return 0
@@ -253,6 +255,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--key", required=True, help="private JWK file of the agent")
     p.add_argument("--name", default=None, help="display name")
     p.add_argument("--caps", nargs="*", default=[], help="capability strings")
+    p.add_argument(
+        "--owner-key", default=None,
+        help="owner (principal) private JWK — binds accountability and enables recovery",
+    )
     p.set_defaults(func=cmd_register)
 
     p = sub.add_parser("attest", help="sign and append an attestation about an agent")
@@ -287,6 +293,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("rotate", help="rotate an identity's key (old key authorizes)")
     p.add_argument("--key", required=True, help="current private JWK file")
     p.add_argument("--new-key", required=True, help="new private JWK file (agentcred keygen)")
+    p.add_argument(
+        "--agent", default=None,
+        help="DID being rotated — required when the OLD key is the owner's (lost-key recovery)",
+    )
     p.set_defaults(func=cmd_rotate)
 
     p = sub.add_parser("serve", help="run the registry HTTP API (requires the api extra)")
