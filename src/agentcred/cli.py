@@ -163,9 +163,10 @@ def cmd_log(args: argparse.Namespace) -> int:
 
 def cmd_revoke(args: argparse.Namespace) -> int:
     registry = _registry(args)
-    did = registry.did_for_key(read_key(args.key))
+    did = getattr(args, "agent", None) or registry.did_for_key(read_key(args.key))
     if did is None:
-        print("error: key does not belong to any registered identity", file=sys.stderr)
+        print("error: key does not belong to any registered identity "
+              "(pass --agent did for owner revocation)", file=sys.stderr)
         return 2
     identity = registry.revoke(did, key_file=args.key)
     print(
@@ -287,7 +288,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_anchor)
 
     p = sub.add_parser("revoke", help="revoke the identity a key owns (self-service, one-way)")
-    p.add_argument("--key", required=True, help="private JWK file of the identity to revoke")
+    p.add_argument("--key", required=True, help="private JWK file of the identity (or its owner)")
+    p.add_argument(
+        "--agent", default=None,
+        help="DID being revoked — required when the key is the owner's (lost-key recovery)",
+    )
     p.set_defaults(func=cmd_revoke)
 
     p = sub.add_parser("rotate", help="rotate an identity's key (old key authorizes)")

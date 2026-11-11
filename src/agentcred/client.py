@@ -123,11 +123,27 @@ class RemoteRegistry:
 
     def revoke(self, did: str, key_file: str | Path) -> dict:
         jwk = read_key(key_file)
-        holder = self.did_for_key(jwk)
-        if holder != did:
-            raise ClientError(0, f"key belongs to {holder or 'no registered identity'}, not {did}")
-        message = canonical({"action": "revoke", "agent": did})
-        return self._call("POST", f"/agents/{did}/revoke", {"signature": sign(message, jwk)})
+        public = _public(jwk)
+        identity = self.identity(did)
+        if identity["public_key"] == public:
+            authority = "self"
+        elif identity.get("owner_key") and identity["owner_key"] == public:
+            authority = "owner"
+        else:
+            raise ClientError(0, f"key belongs neither to {did} nor to its owner")
+        core = {
+            "kind": "agent.revoked",
+            "agent": did,
+            "authority": authority,
+            "revoked_at": _now(),
+        }
+        if authority == "owner":
+            core["authority_public_jwk"] = public
+        body = {k: core[k] for k in ("authority", "revoked_at")}
+        if authority == "owner":
+            body["authority_public_jwk"] = public
+        body["signature"] = sign(canonical(core), jwk)
+        return self._call("POST", f"/agents/{did}/revoke", body)
 
     def rotate(self, did: str, key_file: str | Path, new_key_file: str | Path) -> dict:
         old_jwk = read_key(key_file)

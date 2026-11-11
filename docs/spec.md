@@ -51,11 +51,14 @@ Rules:
   record, verified against the owner key). The spec's earlier
   "no resolvable owner → unscoreable" rule remains a v1.0 enforcement
   target; v0.8 records the binding and grants the authorities.
-- **Revocation** is one-way and self-service: possession of the identity's
-  current private key is the authority to revoke it (`Registry.revoke`, CLI
-  `agentcred revoke --key`). A revoked identity keeps its history but is
-  excluded from new attestations **in both directions** — as subject and as
-  attester. The registry records `revoked_at` and bumps `version`.
+- **Revocation** is one-way, self-service, and **chain-recorded (v0.8.1)**:
+  committing it writes an `agent.revoked` record signed by the authority —
+  the identity's current key (`authority: "self"`, verified against the key
+  valid at that chain position) or its bound owner (`authority: "owner"` +
+  `authority_public_jwk`, self-contained). A revoked identity keeps its
+  history but is excluded from new attestations **in both directions** — as
+  subject and as attester. The registry records `revoked_at` and bumps
+  `version`; the chain carries the tamper-evident proof of the kill.
 - **Key rotation (v0.5)** replaces an identity's key without changing its
   DID — the DID names the identity, not the key. The rotation is a
   `key.rotated` chain record signed by the **old** key and carrying both
@@ -283,7 +286,7 @@ registered public keys and commits to the §8 log.
 | `POST /disputes/{id}/resolve` | resolve (mutual or arbiter signatures) | 400 bad signature/coverage, 404 unknown, 409 already resolved |
 | `GET /disputes/{id}` | dispute view | 404 unknown |
 | `GET /disputes/{id}/evidence` | portable evidence bundle | 404 unknown |
-| `POST /agents/{did}/revoke` | revoke; body is a signature over `canonical({"action": "revoke", "agent": did})` | 400 bad signature, 404 unknown, 409 already revoked |
+| `POST /agents/{did}/revoke` | chain-recorded revoke; body carries the `agent.revoked` core fields + authority signature | 400 bad signature/authority, 404 unknown, 409 already revoked |
 | `POST /agents/{did}/rotate` | rotate the identity's key; body carries `old_public_jwk`, `new_public_jwk`, `rotated_at`, and a signature by the current key over the canonical record | 400 bad signature/mismatch, 404 unknown, 409 revoked/key-in-use |
 | `GET /verify` | chain + signature audit report | — |
 | `GET /health` | liveness + version | — |
@@ -318,7 +321,8 @@ never leave the client process. The CLI drives it with the global
 
 The court system. The chain (§8) gains record kinds: `attestation` (the
 default, including all pre-v0.4 records), `dispute.opened`,
-`dispute.resolved`, `key.rotated`, and `owner.bound` (§2).
+`dispute.resolved`, `key.rotated`, `owner.bound`, and
+`agent.revoked` (§2).
 
 ### Opening
 

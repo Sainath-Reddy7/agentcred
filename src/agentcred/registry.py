@@ -176,37 +176,91 @@ class Registry:
         return self._load_agents().get(did)
 
     def revoke(self, did: str, key_file: str | Path) -> dict:
-        """Self-service, one-way revocation.
+        """Self-service, one-way revocation — now chain-recorded.
 
         Authority: the identity's current private key, or — for owner-bound
-        identities — the owner's key (this is the recovery path when the
-        agent key is lost or compromised). History is kept; the identity is
-        excluded from new attestations in both directions.
+        identities — the owner's key (the recovery path when the agent key
+        is lost or compromised). The revocation is committed to the chain
+        as an `agent.revoked` record signed by that authority, so the kill
+        switch is tamper-evident like every other transition.
         """
-        public = {k: read_key(key_file)[k] for k in ("kty", "crv", "x")}
+        jwk = read_key(key_file)
+        public = {k: jwk[k] for k in ("kty", "crv", "x")}
         identity = self._load_agents().get(did)
         if identity is None:
             raise ValueError(f"unknown agent {did}")
-        if identity["public_key"] != public:
-            if not (identity.get("owner_key") and identity["owner_key"] == public):
-                raise ValueError(f"key belongs neither to {did} nor to its owner")
-        return self.revoke_identity(did)
+        if identity["public_key"] == public:
+            authority = "self"
+        elif identity.get("owner_key") and identity["owner_key"] == public:
+            authority = "owner"
+        else:
+            raise ValueError(f"key belongs neither to {did} nor to its owner")
+        core = {
+            "kind": "agent.revoked",
+            "agent": did,
+            "authority": authority,
+            "revoked_at": _now(),
+        }
+        if authority == "owner":
+            core["authority_public_jwk"] = public
+        signature = sign(canonical(core), jwk)
+        return self.commit_revocation_record(core, [signature])
 
-    def revoke_identity(self, did: str) -> dict:
-        """Apply revocation after authority has been established."""
+    def commit_revocation_record(self, core: dict, signatures: list[str]) -> dict:
+        """Verify and apply a pre-signed revocation (API path)."""
         with file_lock(self.agents_path):
             agents = self._load_agents()
+            did = core.get("agent")
             identity = agents.get(did)
             if identity is None:
                 raise ValueError(f"unknown agent {did}")
             if identity["revoked"]:
                 raise ValueError(f"{did} is already revoked")
+            if core.get("kind") != "agent.revoked":
+                raise ValueError("expected an agent.revoked record")
+            authority = core.get("authority")
+            if authority not in ("self", "owner"):
+                raise ValueError("authority must be 'self' or 'owner'")
+            if not _valid_ts(core.get("revoked_at")):
+                raise ValueError("revoked_at must be ISO-8601 UTC, within clock-skew tolerance of now")
+            if authority == "owner":
+                if not identity.get("owner_key"):
+                    raise ValueError(f"{did} has no owner to revoke it")
+                if core.get("authority_public_jwk") != identity["owner_key"]:
+                    raise ValueError("authority_public_jwk does not match the bound owner")
+                signing_key = core["authority_public_jwk"]
+            else:
+                signing_key = identity["public_key"]
+            if len(signatures) != 1:
+                raise ValueError("agent.revoked carries exactly one signature")
+            try:
+                verify(canonical(core), signatures[0], signing_key)
+            except BadSignatureError as exc:
+                raise ValueError(f"revocation signature does not verify: {exc}") from exc
+            append(self.log_path, core | {"signatures": list(signatures)})
             identity["revoked"] = True
-            identity["revoked_at"] = _now()
+            identity["revoked_at"] = core["revoked_at"]
             identity["version"] += 1
             agents[did] = identity
             self._save_agents(agents)
             return identity
+
+    def revoke_identity(self, did: str) -> dict:
+        """Apply the revocation state change. Only meaningful after
+        authority was established and the agent.revoked record committed;
+        kept for direct internal use."""
+        agents = self._load_agents()
+        identity = agents.get(did)
+        if identity is None:
+            raise ValueError(f"unknown agent {did}")
+        if identity["revoked"]:
+            raise ValueError(f"{did} is already revoked")
+        identity["revoked"] = True
+        identity["revoked_at"] = _now()
+        identity["version"] += 1
+        agents[did] = identity
+        self._save_agents(agents)
+        return identity
 
     # -- key rotation (v0.5) ---------------------------------------------
 
@@ -1143,6 +1197,29 @@ class Registry:
                 for who, signature in zip(entry.get("resolved_by", []), entry.get("signatures", [])):
                     if _check_sig(record.index, who, canonical(core), signature):
                         valid += 1
+            elif kind == "agent.revoked":
+                core = {k: v for k, v in entry.items() if k != "signatures"}
+                if entry.get("agent") not in agents:
+                    problems.append(
+                        {"index": record.index, "issue": "unknown_agent", "detail": entry.get("agent")}
+                    )
+                    continue
+                if entry.get("authority") == "owner":
+                    signing_key = entry.get("authority_public_jwk")
+                else:
+                    signing_key = key_for(entry["agent"], record.index)
+                if not signing_key:
+                    problems.append(
+                        {"index": record.index, "issue": "unknown_attester", "detail": entry.get("agent")}
+                    )
+                    continue
+                try:
+                    verify(canonical(core), entry["signatures"][0], signing_key)
+                    valid += 1
+                except (BadSignatureError, ValueError, KeyError) as exc:
+                    problems.append(
+                        {"index": record.index, "issue": "bad_signature", "detail": str(exc)}
+                    )
             elif kind == "owner.bound":
                 core = {k: v for k, v in entry.items() if k != "signatures"}
                 if entry.get("agent") not in agents:

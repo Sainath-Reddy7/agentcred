@@ -17,7 +17,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from nacl.exceptions import BadSignatureError
-from pydantic import BaseModel
+from pydantic import BaseModel  # noqa: F401 — retained for future request models
 
 from . import __version__
 from .canonical import canonical
@@ -26,10 +26,6 @@ from .models import Attestation
 from .registry import Registry
 
 FUTURE_TOLERANCE = timedelta(minutes=5)
-
-
-class RevokeBody(BaseModel):
-    signature: str
 
 
 def _parse_ts(ts: str) -> datetime:
@@ -174,20 +170,34 @@ def create_app(state_dir: str | None = None) -> FastAPI:
         return {"recorded": committed.id, "attestation": committed.to_dict()}
 
     @app.post("/agents/{did}/revoke")
-    def revoke(did: str, body: RevokeBody) -> dict:
-        identity = reg().identity(did)
-        if identity is None:
-            raise HTTPException(404, f"unknown agent {did}")
-        if identity["revoked"]:
-            raise HTTPException(409, f"{did} is already revoked")
-        message = canonical({"action": "revoke", "agent": did})
+    def revoke(did: str, body: dict) -> dict:
+        """Chain-recorded revocation: the body's signature must come from
+        the current agent key (or the bound owner's key) over the
+        canonical `agent.revoked` core (spec §2)."""
+        signature = body.get("signature")
+        core = {
+            "kind": "agent.revoked",
+            "agent": did,
+            "authority": body.get("authority", "self"),
+            "revoked_at": body.get("revoked_at"),
+        }
+        if core["authority"] == "owner":
+            core["authority_public_jwk"] = body.get("authority_public_jwk")
+        if not signature:
+            raise HTTPException(400, "revocation must carry a signature from the agent or owner key")
         try:
-            verify(message, body.signature, identity["public_key"])
-        except (BadSignatureError, ValueError) as exc:
-            raise HTTPException(
-                400, "revocation signature does not verify for this identity"
-            ) from exc
-        return reg().revoke_identity(did)
+            return reg().commit_revocation_record(core, [signature])
+        except BadSignatureError as exc:
+            raise HTTPException(400, f"revocation signature does not verify: {exc}") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if "unknown" in message:
+                code = 404
+            elif "already revoked" in message:
+                code = 409
+            else:
+                code = 400
+            raise HTTPException(code, message) from exc
 
     @app.post("/disputes", status_code=201)
     def open_dispute(body: dict) -> dict:

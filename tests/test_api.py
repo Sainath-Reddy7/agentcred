@@ -233,21 +233,33 @@ def test_revocation_via_api():
     with tempfile.TemporaryDirectory() as tmp:
         client = make_client(tmp)
         seller_jwk, seller_did = register(client, "seller")
-        buyer_jwk, _ = register(client, "buyer")
+        buyer_jwk, buyer_did = register(client, "buyer")
 
-        intent = canonical({"action": "revoke", "agent": seller_did})
+        core = {
+            "kind": "agent.revoked",
+            "agent": seller_did,
+            "authority": "self",
+            "revoked_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        # buyer cannot sign the seller's revocation
         wrong = client.post(
-            f"/agents/{seller_did}/revoke", json={"signature": sign(intent, buyer_jwk)}
+            f"/agents/{seller_did}/revoke",
+            json={"authority": "self", "revoked_at": core["revoked_at"],
+                  "signature": sign(canonical(core), buyer_jwk)},
         )
-        assert wrong.status_code == 400  # buyer can't revoke seller
+        assert wrong.status_code == 400
 
         ok = client.post(
-            f"/agents/{seller_did}/revoke", json={"signature": sign(intent, seller_jwk)}
+            f"/agents/{seller_did}/revoke",
+            json={"authority": "self", "revoked_at": core["revoked_at"],
+                  "signature": sign(canonical(core), seller_jwk)},
         )
         assert ok.status_code == 200 and ok.json()["revoked"] is True
 
         again = client.post(
-            f"/agents/{seller_did}/revoke", json={"signature": sign(intent, seller_jwk)}
+            f"/agents/{seller_did}/revoke",
+            json={"authority": "self", "revoked_at": core["revoked_at"],
+                  "signature": sign(canonical(core), seller_jwk)},
         )
         assert again.status_code == 409
 
@@ -256,6 +268,9 @@ def test_revocation_via_api():
 
         flags = client.get(f"/agents/{seller_did}").json()["flags"]
         assert "revoked" in flags
+        # the revocation is now a chain record, verified like everything else
+        audit = client.get("/verify").json()
+        assert audit["ok"] and audit["signatures_valid"] >= 1
 
 
 def test_invalid_type_rejected():
