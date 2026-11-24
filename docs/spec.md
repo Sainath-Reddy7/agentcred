@@ -289,6 +289,7 @@ registered public keys and commits to the §8 log.
 | `POST /agents/{did}/revoke` | chain-recorded revoke; body carries the `agent.revoked` core fields + authority signature | 400 bad signature/authority, 404 unknown, 409 already revoked |
 | `POST /agents/{did}/rotate` | rotate the identity's key; body carries `old_public_jwk`, `new_public_jwk`, `rotated_at`, and a signature by the current key over the canonical record | 400 bad signature/mismatch, 404 unknown, 409 revoked/key-in-use |
 | `GET /verify` | chain + signature audit report | — |
+| `GET /export` | full-registry export bundle (identities + chain + anchor) — verifiable offline, restorable via `agentcred import` | — |
 | `GET /health` | liveness + version | — |
 
 Server-side rules for submitted attestations:
@@ -310,6 +311,16 @@ authority the protocol recognizes (until v0.3 owner-key rotation).
 **Not provided yet** (reference deployment, not production): authentication,
 rate limiting, request signing, multi-tenant state. Sybil-resistance
 measures are the open v0.3 roadmap item.
+
+**Registry export (v0.8.2).** `GET /export` / `agentcred export` bundles the
+complete registry: identities, the full chain, and the head anchor.
+Verification is end-to-end — chain, anchor, identity↔chain cross-checks
+(owner bindings, rotation timelines, chain-recorded revocations must
+agree), and reference completeness. `agentcred import` restores a bundle
+only if it verifies AND the restored registry passes a full `verify()`.
+Honest limit: an identity that never rotated, never bound an owner, and
+appears in no records is anchored only by `agents.json` — its key is
+export-trusted.
 
 **Reference client (v0.7).** `agentcred.client.RemoteRegistry` mirrors the
 local Registry surface over this API — register, attest, query, verify,

@@ -153,10 +153,10 @@ def test_expired_status_derived():
 
     with tempfile.TemporaryDirectory() as tmp:
         (registry, payer_key, payee_key, _, _, payee_did, _) = setup_world(tmp)
-        near = (datetime.now(timezone.utc) + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        near = (datetime.now(timezone.utc) + timedelta(seconds=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
         deal = open_default(registry, payer_key, payee_key, payee_did, deadline=near)
         assert registry.deal_view(deal["id"])["status"] == "open"
-        time.sleep(2)
+        time.sleep(3)
         assert registry.deal_view(deal["id"])["status"] == "expired"
 
 

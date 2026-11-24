@@ -1003,6 +1003,40 @@ class Registry:
                 views.append(view)
         return views
 
+    def export_state(self) -> dict:
+        """Full-registry export bundle (identities + chain + anchor)."""
+        from .export import export_state as build
+
+        return build(self._load_agents(), self._records())
+
+    def import_state(self, bundle: dict, force: bool = False) -> dict:
+        """Verify an export end-to-end and restore it into this registry.
+
+        Refuses a non-empty target unless `force`. The final gate is a
+        full `verify()` on the restored state — a tampered bundle never
+        becomes a live registry.
+        """
+        from .export import verify_export_state
+
+        report = verify_export_state(bundle)
+        if not report["ok"]:
+            raise ValueError(f"export does not verify: {report['problems'][:3]}")
+        with file_lock(self.agents_path), file_lock(self.log_path):
+            existing_agents = self._load_agents()
+            existing_records = load(self.log_path)
+            if (existing_agents or existing_records) and not force:
+                raise ValueError("target registry is not empty — pass force to overwrite")
+            self.agents_path.write_text(
+                json.dumps(bundle["identities"], indent=2), encoding="utf-8"
+            )
+            with open(self.log_path, "w", encoding="utf-8") as fh:
+                for raw in bundle["records"]:
+                    fh.write(canonical(raw).decode("utf-8") + "\n")
+        final = self.verify()
+        if not final["ok"]:
+            raise ValueError(f"imported registry fails verification: {final['problems'][:3]}")
+        return final
+
     def evidence_bundle(self, dispute_id: str) -> dict:
         """Portable, self-verifying court document for one dispute.
 

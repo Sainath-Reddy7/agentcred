@@ -135,6 +135,31 @@ def cmd_query(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_export(args: argparse.Namespace) -> int:
+    bundle = _registry(args).export_state()
+    if args.out:
+        Path(args.out).write_text(json.dumps(bundle, indent=2), encoding="utf-8")
+        anchor = bundle["anchor"]
+        print(
+            f"exported {anchor['length']} records, {len(bundle['identities'])} identities → {args.out}"
+        )
+        print(f"head: {anchor['head']}")
+    else:
+        print(json.dumps(bundle, indent=2))
+    return 0
+
+
+def cmd_import(args: argparse.Namespace) -> int:
+    bundle = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    registry = Registry(args.state)  # import is a local-state operation
+    report = registry.import_state(bundle, force=args.force)
+    print(
+        f"imported {report['records']} records — verify ok, "
+        f"{report['signatures_valid']} signatures valid"
+    )
+    return 0
+
+
 def cmd_anchor(args: argparse.Namespace) -> int:
     anchor = _registry(args).head()
     print(f"head:   {anchor['head']}")
@@ -286,6 +311,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("anchor", help="print the chain head anchor for external publication")
     p.set_defaults(func=cmd_anchor)
+
+    p = sub.add_parser("export", help="export the full registry state (backup/migration)")
+    p.add_argument("--out", default=None, help="write the bundle to a file instead of stdout")
+    p.set_defaults(func=cmd_export)
+
+    p = sub.add_parser("import", help="verify and restore an export into this state dir")
+    p.add_argument("--file", required=True, help="export bundle to import")
+    p.add_argument("--force", action="store_true", help="overwrite a non-empty registry")
+    p.set_defaults(func=cmd_import)
 
     p = sub.add_parser("revoke", help="revoke the identity a key owns (self-service, one-way)")
     p.add_argument("--key", required=True, help="private JWK file of the identity (or its owner)")
