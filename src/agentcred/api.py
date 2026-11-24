@@ -72,6 +72,7 @@ def create_app(state_dir: str | None = None) -> FastAPI:
                 "POST /agents/{did}/rotate — rotate the identity's key (old key signs)",
                 "GET /verify — log chain + signature report (optional ?expected_head= truncation anchor)",
                 "GET /anchor — chain head anchor for external publication",
+                "GET /export — full-registry export bundle",
                 "GET /health",
             ],
         }
@@ -418,6 +419,12 @@ def create_app(state_dir: str | None = None) -> FastAPI:
     def anchor() -> dict:
         """Chain head anchor — publish it anywhere the log cannot rewrite."""
         return reg().head()
+
+    @app.get("/export")
+    def export_state() -> dict:
+        """Full-registry export bundle — verifiable offline, restorable
+        via `agentcred import` (spec §9)."""
+        return reg().export_state()
 
     @app.get("/verify")
     def verify_registry(

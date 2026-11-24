@@ -204,6 +204,10 @@ class RemoteRegistry:
     def anchor(self) -> dict:
         return self._call("GET", "/anchor")
 
+    def export(self) -> dict:
+        """Pull the full registry export bundle (restore with the CLI)."""
+        return self._call("GET", "/export")
+
     def verify(self, expected_head: str | None = None, expected_length: int | None = None) -> dict:
         params = []
         if expected_head:

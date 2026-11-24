@@ -93,7 +93,7 @@ sequenceDiagram
 │   ├── evidence.py               # Offline evidence-bundle verifier
 │   ├── api.py                    # HTTP registry API (FastAPI)
 │   └── cli.py                    # The `agentcred` command
-└── tests/                        # Test suite (96 tests)
+└── tests/                        # Test suite (99 tests)
 ```
 
 ## Quickstart
@@ -265,6 +265,12 @@ fly launch && fly deploy
 
 State directory resolution: explicit argument → `AGENTCRED_STATE` env →
 `./agentcred-state`.
+
+**Backup & migration:** `agentcred export --out registry.json` bundles the
+full state (identities + chain + head anchor); `agentcred import --file
+registry.json` restores it — but only after the bundle passes end-to-end
+verification (chain, anchor, identity cross-checks, restored-state
+verify). A tampered export never becomes a live registry.
 
 ## Status & roadmap
 

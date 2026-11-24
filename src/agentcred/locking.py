@@ -27,7 +27,10 @@ def file_lock(resource_path: Path, timeout: float = DEFAULT_TIMEOUT) -> Iterator
     while fd is None:
         try:
             fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
+        except (FileExistsError, PermissionError):
+            # FileExistsError: held. PermissionError: on Windows, a
+            # concurrent create/unlink race surfaces as a sharing
+            # violation — treat exactly like a held lock and retry.
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"{lock_path} is held — stale lock?")
             time.sleep(0.05)
